@@ -130,8 +130,16 @@ class Trainer(BaseModel):
     def set_input(self, input):
         self.input           = input[1].cuda()
         self.text            = input[2]
-        self.input_ids       = input[3].cuda()
-        self.attention_mask  = input[4].cuda()
+        # Handle multiprocessing collate edge case: input_ids / attention_mask
+        # may arrive as tuples of tensors instead of stacked tensors
+        if isinstance(input[3], (tuple, list)):
+            self.input_ids = torch.stack(list(input[3])).cuda()
+        else:
+            self.input_ids = input[3].cuda()
+        if isinstance(input[4], (tuple, list)):
+            self.attention_mask = torch.stack(list(input[4])).cuda()
+        else:
+            self.attention_mask = input[4].cuda()
         self.label = input[5].cuda().float()
 
 
