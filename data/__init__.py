@@ -29,6 +29,17 @@ def get_bal_sampler(dataset):
     return sampler
 
 
+def collate(batch):
+    return (
+        [item[0] for item in batch],
+        torch.stack([item[1] for item in batch]),
+        [item[2] for item in batch],
+        torch.stack([item[3] for item in batch]),
+        torch.stack([item[4] for item in batch]),
+        torch.tensor([item[5] for item in batch]),
+    )
+
+
 def create_dataloader(opt):
     shuffle = not opt.serial_batches if (opt.isTrain and not opt.class_bal) else False
     dataset = get_dataset(opt)
@@ -39,5 +50,6 @@ def create_dataloader(opt):
                                               shuffle=shuffle,
                                               sampler=sampler,
                                               drop_last=True if opt.isTrain else False,
-                                              num_workers=int(opt.num_threads))
+                                              num_workers=int(opt.num_threads),
+                                              collate_fn=collate)
     return data_loader

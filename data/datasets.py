@@ -21,7 +21,7 @@ _tokenizer_cache = {}
 def _get_tokenizer(clip_path):
     if clip_path not in _tokenizer_cache:
         _tokenizer_cache[clip_path] = AutoTokenizer.from_pretrained(
-            clip_path, model_max_length=77, padding_side="right", use_fast=False)
+            clip_path, model_max_length=77, padding_side="right", use_fast=True)
         _tokenizer_cache[clip_path].pad_token_id = 0
     return _tokenizer_cache[clip_path]
 
