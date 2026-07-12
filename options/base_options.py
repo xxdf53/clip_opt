@@ -52,6 +52,19 @@ class BaseOptions():
         parser.add_argument('--lora_r',          type=int, default=16, help='eval frequency')
         parser.add_argument('--lora_alpha',      type=int, default=32, help='eval frequency')
         parser.add_argument('--lora_dropout',    type=float, default=0.1, help='eval frequency')
+        parser.add_argument('--use_local_features', action='store_true',
+                            help='fuse an intermediate CLIP patch-token representation into the classifier')
+        parser.add_argument('--local_layer', type=int, default=12,
+                            help='CLIP vision Transformer layer used for local patch features')
+        parser.add_argument('--local_dim', type=int, default=256,
+                            help='projected dimension of the local patch feature')
+        parser.add_argument('--local_dropout', type=float, default=0.1,
+                            help='dropout in the local projector and fused classifier')
+        parser.add_argument('--local_pool', type=str, default='mean_std',
+                            choices=['mean', 'mean_std'],
+                            help='statistics used to aggregate patch tokens')
+        parser.add_argument('--freeze_vision_lora', action='store_true',
+                            help='freeze CLIP vision LoRA and train only newly added heads')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True
@@ -98,6 +111,11 @@ class BaseOptions():
         opt.isTrain = self.isTrain   # train or test
         opt.imgroot = opt.dataroot
         opt.name = '__'.join([opt.name, time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()), 'Seed_'+str(opt.seed), 'cates_'+'-'.join(opt.cates), 'claloss_'+str(opt.claloss), 'lora_r_'+str(opt.lora_r), 'lora_alpha_'+str(opt.lora_alpha), 'lora_dropout_'+str(opt.lora_dropout), 'lr_'+str(opt.lr)])
+        if opt.use_local_features:
+            opt.name += '__local_layer_{}__pool_{}__dim_{}'.format(
+                opt.local_layer, opt.local_pool, opt.local_dim)
+            if opt.freeze_vision_lora:
+                opt.name += '__frozen_vision_lora'
 
         if opt.suffix:
             suffix = ('_' + opt.suffix.format(**vars(opt))) if opt.suffix != '' else ''

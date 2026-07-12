@@ -59,10 +59,19 @@ def parse_args():
     parser.add_argument('--lora_r',      type=int, default=16)
     parser.add_argument('--lora_alpha',  type=int, default=32)
     parser.add_argument('--lora_dropout',type=float, default=0.1)
+    parser.add_argument('--use_local_features', action='store_true')
+    parser.add_argument('--local_layer', type=int, default=12)
+    parser.add_argument('--local_dim', type=int, default=256)
+    parser.add_argument('--local_dropout', type=float, default=0.1)
+    parser.add_argument('--local_pool', choices=['mean', 'mean_std'],
+                        default='mean_std')
     return parser.parse_args()
 
 
-def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha, lora_dropout, device):
+def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
+                    lora_dropout, device, use_local_features=False,
+                    local_layer=12, local_dim=256, local_dropout=0.1,
+                    local_pool='mean_std'):
     """
     加载训练保存的 LoRA checkpoint。
 
@@ -95,6 +104,11 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha, lora_dropout
         lora_r=lora_r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
+        use_local_features=use_local_features,
+        local_layer=local_layer,
+        local_dim=local_dim,
+        local_dropout=local_dropout,
+        local_pool=local_pool,
     )
     model.load_state_dict(new_state_dict, strict=True)
     model.to(device)
@@ -164,7 +178,12 @@ if __name__ == '__main__':
     # ── 1. 加载模型 ──
     model = load_checkpoint(
         args.checkpoint, args.clip_path,
-        args.lora_r, args.lora_alpha, args.lora_dropout, device
+        args.lora_r, args.lora_alpha, args.lora_dropout, device,
+        use_local_features=args.use_local_features,
+        local_layer=args.local_layer,
+        local_dim=args.local_dim,
+        local_dropout=args.local_dropout,
+        local_pool=args.local_pool,
     )
 
     dataroot = args.dataroot.rstrip('/').rstrip('\\')

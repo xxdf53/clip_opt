@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from networks.base_model import BaseModel
 
 from transformers import CLIPProcessor, CLIPModel
@@ -8,7 +9,11 @@ from peft import LoraConfig, get_peft_model
 
 
 class CLIPModel_lora(nn.Module):
-    def __init__(self, name='openai/clip-vit-large-patch14-336', num_classes=1, lora_r=16, lora_alpha=32, lora_dropout=0.05):
+    def __init__(self, name='openai/clip-vit-large-patch14-336', num_classes=1,
+                 lora_r=16, lora_alpha=32, lora_dropout=0.05,
+                 use_local_features=False, local_layer=12, local_dim=256,
+                 local_dropout=0.1, local_pool='mean_std',
+                 freeze_vision_lora=False):
         super(CLIPModel_lora, self).__init__()
         self.model        = CLIPModel.from_pretrained(name)
         self.processor    = CLIPProcessor.from_pretrained(name)
@@ -25,10 +30,52 @@ class CLIPModel_lora(nn.Module):
                 target_modules=['q_proj','k_proj','v_proj'],
                 lora_dropout=lora_dropout,
                 bias="none",
-            )
+        )
         self.vision_tower_lora = get_peft_model(self.vision_tower, lora_config)
-        self.model.fc = nn.Linear( 768, num_classes )
-        torch.nn.init.normal_(self.model.fc.weight.data, 0.0, 0.02)
+        if freeze_vision_lora:
+            self.vision_tower_lora.requires_grad_(False)
+
+        self.use_local_features = use_local_features
+        self.local_layer = local_layer
+        self.local_pool = local_pool
+        vision_dim = self.model.config.vision_config.hidden_size
+        projection_dim = self.model.config.projection_dim
+
+        if self.use_local_features:
+            num_layers = self.model.config.vision_config.num_hidden_layers
+            if not 1 <= self.local_layer <= num_layers:
+                raise ValueError(
+                    f'local_layer must be in [1, {num_layers}], got {self.local_layer}')
+            if self.local_pool not in ('mean', 'mean_std'):
+                raise ValueError(
+                    f"local_pool must be 'mean' or 'mean_std', got {self.local_pool}")
+
+            pooled_dim = vision_dim if self.local_pool == 'mean' else 2 * vision_dim
+            self.local_norm = nn.LayerNorm(vision_dim)
+            self.local_projector = nn.Sequential(
+                nn.Linear(pooled_dim, local_dim),
+                nn.GELU(),
+                nn.Dropout(local_dropout),
+            )
+            self.model.fc = nn.Sequential(
+                nn.Linear(projection_dim + local_dim, 256),
+                nn.GELU(),
+                nn.Dropout(local_dropout),
+                nn.Linear(256, num_classes),
+            )
+        else:
+            self.model.fc = nn.Linear(projection_dim, num_classes)
+
+        self.model.fc.apply(self._init_linear)
+        if self.use_local_features:
+            self.local_projector.apply(self._init_linear)
+
+    @staticmethod
+    def _init_linear(module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
 
     def encode_text(self, input_ids, attention_mask):
@@ -48,20 +95,42 @@ class CLIPModel_lora(nn.Module):
         vision_outputs = self.vision_tower_lora(
             pixel_values=img,
             output_attentions    = self.model.config.output_attentions,
-            output_hidden_states = self.model.config.output_hidden_states,
-            return_dict          = self.model.config.use_return_dict,
+            output_hidden_states = self.use_local_features,
+            return_dict          = True,
         )
-        pooled_output = vision_outputs[1]  # pooled_output
-        image_features = self.model.visual_projection(pooled_output)
-        return image_features    
+        image_features = self.model.visual_projection(
+            vision_outputs.pooler_output)
+
+        if not self.use_local_features:
+            return image_features, None
+
+        # hidden_states[0] is the patch embedding output, so index k is the
+        # representation after the k-th Transformer layer.
+        local_tokens = vision_outputs.hidden_states[self.local_layer][:, 1:, :]
+        local_tokens = self.local_norm(local_tokens)
+        local_mean = local_tokens.mean(dim=1)
+        if self.local_pool == 'mean_std':
+            local_std = local_tokens.std(dim=1, unbiased=False)
+            local_stats = torch.cat((local_mean, local_std), dim=-1)
+        else:
+            local_stats = local_mean
+        local_features = self.local_projector(local_stats)
+        return image_features, local_features
+
+    def classify(self, image_features, local_features):
+        image_features = F.normalize(image_features, p=2, dim=-1)
+        if not self.use_local_features:
+            return image_features, self.model.fc(image_features)
+
+        local_features = F.normalize(local_features, p=2, dim=-1)
+        fused_features = torch.cat((image_features, local_features), dim=-1)
+        return image_features, self.model.fc(fused_features)
     
     def forward(self, img, input_ids, attention_mask, cla=False):
         # tmp = x; print(f'x: {tmp.shape}, max: {tmp.max()}, min: {tmp.min()}, mean: {tmp.mean()}')
 
-        image_embeds = self.encode_image(img)
-
-        image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
-        classhead = self.model.fc(image_embeds)
+        image_features, local_features = self.encode_image(img)
+        image_embeds, classhead = self.classify(image_features, local_features)
         if cla: return classhead 
         
         text_embeds  = self.encode_text(input_ids, attention_mask)
@@ -74,9 +143,8 @@ class CLIPModel_lora(nn.Module):
         return logits_per_image, classhead.squeeze(1)
     
     def forward_eval(self, img):
-        image_embeds = self.encode_image(img)
-        image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
-        classhead = self.model.fc(image_embeds)
+        image_features, local_features = self.encode_image(img)
+        _, classhead = self.classify(image_features, local_features)
         return classhead 
 
 class Trainer(BaseModel):
@@ -90,11 +158,23 @@ class Trainer(BaseModel):
         self.claloss = opt.claloss
         
         self.printOne = 1
-        self.model = CLIPModel_lora(name=opt.clip, lora_r=opt.lora_r, lora_alpha=opt.lora_alpha, lora_dropout=opt.lora_dropout)
+        self.model = CLIPModel_lora(
+            name=opt.clip,
+            lora_r=opt.lora_r,
+            lora_alpha=opt.lora_alpha,
+            lora_dropout=opt.lora_dropout,
+            use_local_features=opt.use_local_features,
+            local_layer=opt.local_layer,
+            local_dim=opt.local_dim,
+            local_dropout=opt.local_dropout,
+            local_pool=opt.local_pool,
+            freeze_vision_lora=opt.freeze_vision_lora,
+        )
 
-        net_params = sum(map(lambda x: x.numel(), self.model.model.parameters())) 
-
-        print(f'Model parameters {net_params:,d}')
+        net_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(
+            p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f'Model parameters {net_params:,d}; trainable {trainable_params:,d}')
 
         if self.isTrain:
             self.loss_fn = nn.BCEWithLogitsLoss()
