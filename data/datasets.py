@@ -63,6 +63,8 @@ class ImageFolder2(datasets.DatasetFolder):
         textpath = os.path.splitext(textpath)[0] + '.txt'
 
         sample = self.loader(path)
+        if self.opt.isTrain and getattr(self.opt, 'data_aug', False):
+            sample = data_augment(sample, self.opt)
         try:
             with open(textpath, 'r') as file:
                 text = file.read()

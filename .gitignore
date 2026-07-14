@@ -11,6 +11,7 @@ build/
 *.ckpt
 clip-vit-large-patch14/
 UniversalFakeDetect/
+ForenSynths_train_val_19test/
 prefix_caption/
 Genimage_CNNDetection_CLIP_prefix_caption/
 Chameleon/
@@ -18,6 +19,10 @@ diffusion/
 vqdm/
 my_first_test/
 checkpoints/
+c2p_checkpoints/
+jpeg_test/
+*.zip
+*.bak
 *.png
 *.jpg
 .DS_Store

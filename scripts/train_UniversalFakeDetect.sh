@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2 python scripts/train.py \
     --name ForenSynths_train_val_19test_dataset \
     --dataroot ./ForenSynths_train_val_19test/ \
     --classes car,cat,chair,horse \
