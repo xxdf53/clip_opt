@@ -9,7 +9,7 @@
    main
    ├── seed_torch()       — 全局函数：锁定所有随机性来源，保证可复现
    ├── get_val_opt()      — 全局函数：构造验证配置（供外部脚本导入使用）
-   ├── testmodel()        — 闭包函数：按 epoch 评估所有测试子集
+   ├── testmodel()        — 闭包函数：按配置步数评估所有测试子集
    └── 训练循环
        ├── set_input()    — 将数据从 CPU 搬运到 GPU
        ├── optimize_parameters() — 前向 + 计算双损失 + 反向 + AdamW 更新
@@ -32,6 +32,10 @@ from networks.trainer import Trainer   # 训练器：包含 CLIPModel_lora + 优
 from options.train_options import TrainOptions  # 训练参数解析
 from options.test_options import TestOptions    # 测试参数解析
 from utils.util import Logger          # stdout → 文件 tee
+from utils.evaluation_schedule import (
+    should_evaluate,
+    should_run_final_evaluation,
+)
 import random
 
 
@@ -132,7 +136,7 @@ if __name__ == '__main__':
     model = Trainer(opt)
     
     # ╔══════════════════════════════════════════════════════════════════════════╗
-    # ║         闭包函数: testmodel() — 按 epoch 做多子集评估                  ║
+    # ║         闭包函数: testmodel() — 按配置步数做多子集评估                 ║
     # ╚══════════════════════════════════════════════════════════════════════════╝
     def testmodel(epoch=0):
         """
@@ -184,9 +188,23 @@ if __name__ == '__main__':
         # 返回值用于 save_networks 文件名中的 testacc 字段
         return round(np.array(accs).mean() * 100, 4)
 
+    def evaluate_and_save(epoch):
+        """Evaluate all held-out subsets and save the corresponding checkpoint."""
+        model.eval()
+        testacc = testmodel(epoch)
+        model.save_networks(
+            f'{str(epoch)}_total_steps_{str(model.total_steps)}_testacc_{str(testacc)}')
+        print('saving the latest model %s (epoch %d, model.total_steps %d)' %
+              (opt.name, epoch, model.total_steps))
+        model.train()
+        return model.total_steps
+
     # ─── 阶段 ②：训练循环 ──────────────────────────────────────────────────
     model.train()
+    last_eval_step = None
+    last_epoch = 0
     for epoch in range(opt.niter):
+        last_epoch = epoch
         # epoch_start_time / iter_data_time 当前未使用（可能最初为计时预留）
         epoch_start_time = time.time()
         iter_data_time = time.time()
@@ -194,12 +212,10 @@ if __name__ == '__main__':
 
         for i, data in enumerate(data_loader):
             # data = (path, img, text, input_ids, attention_mask, label) — 6 元组
-            model.total_steps += 1
-            
-            # ⚠️ 全局步数上限：在 shell 脚本中设置为 100 (genimage) 或 800 (UniversalFakeDetect)
-            # 这意味着以 batch_size=128 计，最多只跑 12,800 / 102,400 张图就停止
-            if model.total_steps > opt.total_steps:
+            if model.total_steps >= opt.total_steps:
                 break
+
+            model.total_steps += 1
             
             epoch_iter += opt.batch_size
             
@@ -218,16 +234,12 @@ if __name__ == '__main__':
                           model.loss, model.loss1, model.loss2,
                           model.total_steps, model.lr))
 
-            # ─── 已注释：训练中按步评估（当前不启用） ─────────────────────
-            # 如果需要训练过程中间评估，取消注释即可：
-            # if model.total_steps % opt.eval_freq == 0:
-            #     print(os.getcwd())
-            #     print(f'==========total_steps {model.total_steps}=================')
-            #     model.eval()
-            #     testacc = testmodel(epoch)
-            #     model.save_networks(
-            #         f'{str(epoch)}_total_steps_{str(model.total_steps)}_testacc_{str(testacc)}')
-            #     model.train()
+            if should_evaluate(model.total_steps, opt.eval_freq):
+                print(f'==========total_steps {model.total_steps}=================')
+                last_eval_step = evaluate_and_save(epoch)
+
+        if model.total_steps >= opt.total_steps:
+            break
 
         # ─── 阶段 ③：学习率衰减（每个 delr_freq epoch，跳过 epoch 0） ─────
         if epoch % opt.delr_freq == 0 and epoch != 0:
@@ -237,13 +249,6 @@ if __name__ == '__main__':
             # lr *= delr（默认 delr=0.8），见 trainer.py:105
             model.adjust_learning_rate()
 
-        # ─── 阶段 ④：评估 & 保存（每个 epoch 结束） ────────────────────────
-        model.eval()
-        testacc = testmodel(epoch)
-        # 保存模型权重（.pth 全量 + HuggingFace 格式），文件名含 epoch/步数/acc
-        model.save_networks(
-            f'{str(epoch)}_total_steps_{str(model.total_steps)}_testacc_{str(testacc)}')
-        print('saving the latest model %s (epoch %d, model.total_steps %d)' %
-              (opt.name, epoch, model.total_steps))
-        # 恢复训练模式，进入下一轮 epoch
-        model.train()
+    if should_run_final_evaluation(model.total_steps, last_eval_step):
+        print(f'==========final total_steps {model.total_steps}=================')
+        evaluate_and_save(last_epoch)
