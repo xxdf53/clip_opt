@@ -3,6 +3,7 @@ import numpy as np
 from torch.utils.data.sampler import WeightedRandomSampler
 
 from .datasets import dataset_folder
+from utils.data_loading import should_drop_last_batch
 
 import os
 def get_dataset(opt):
@@ -49,7 +50,10 @@ def create_dataloader(opt):
                                               batch_size=opt.batch_size,
                                               shuffle=shuffle,
                                               sampler=sampler,
-                                              drop_last=True if opt.isTrain else False,
+                                              drop_last=should_drop_last_batch(
+                                                  opt.isTrain,
+                                                  getattr(opt, 'keep_last_batch', False),
+                                              ),
                                               num_workers=int(opt.num_threads),
                                               collate_fn=collate)
     return data_loader

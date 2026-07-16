@@ -29,6 +29,8 @@ class BaseOptions():
         parser.add_argument('--classes',         default='', help='which classes to use, separated by comma. If empty, use all subfolders of dataroot')
         parser.add_argument('--class_bal',       action='store_true')
         parser.add_argument('--batch_size',      type=int, default=64, help='input batch size')
+        parser.add_argument('--keep_last_batch', action='store_true',
+                            help='keep an incomplete final training batch instead of dropping it')
         parser.add_argument('--loadSize',        type=int, default=256, help='scale images to this size')
         parser.add_argument('--cropSize',        type=int, default=224, help='then crop to this size')
         parser.add_argument('--gpu_ids',         type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
