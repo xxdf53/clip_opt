@@ -39,6 +39,7 @@ from sklearn.metrics import average_precision_score, accuracy_score, confusion_m
 
 from data import create_dataloader
 from networks.trainer import CLIPModel_lora
+from utils.checkpoint_loading import extract_training_state_dict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -87,15 +88,9 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
     print(f'Loading checkpoint: {checkpoint_path}')
     raw = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
 
-    state_dict = raw['model']
-    total_steps = raw['total_steps']
-    print(f'  Total training steps: {total_steps}')
-
-    # 去除 DataParallel 的 'module.' 前缀
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        new_key = k.replace('module.', '') if k.startswith('module.') else k
-        new_state_dict[new_key] = v
+    new_state_dict, total_steps = extract_training_state_dict(raw)
+    print('  Total training steps: '
+          f'{total_steps if total_steps is not None else "unknown"}')
 
     # 创建与训练时相同结构的模型
     model = CLIPModel_lora(

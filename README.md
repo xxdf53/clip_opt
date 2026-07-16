@@ -60,6 +60,50 @@ python inference.py \
   --model_path ./checkpoints/c2p_clip_genimage/last_model.pth
 ```
 
+### Logit distribution analysis for self-trained LoRA checkpoints
+
+Baseline model on `my_first_test`:
+
+```bash
+python scripts/plot_logit_dist.py \
+  --dataroot ./my_first_test \
+  --checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --save ./baseline_logit_distribution.png
+```
+
+Local-feature model on `my_first_test`:
+
+```bash
+python scripts/plot_logit_dist.py \
+  --dataroot ./my_first_test \
+  --checkpoint ./c2p_checkpoints/local/model.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --use_local_features \
+  --local_layer 12 --local_dim 256 \
+  --local_dropout 0.1 --local_pool mean_std \
+  --save ./local_logit_distribution.png
+```
+
+Compare matched baseline and local-feature checkpoints with shared bins:
+
+```bash
+python scripts/plot_logit_dist.py \
+  --dataroot ./my_first_test \
+  --checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --checkpoint_label Baseline \
+  --compare_checkpoint ./c2p_checkpoints/local/model.pth \
+  --compare_label Local \
+  --compare_use_local_features \
+  --clip_path ./clip-vit-large-patch14 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --local_layer 12 --local_dim 256 \
+  --local_dropout 0.1 --local_pool mean_std \
+  --save ./baseline_vs_local_logits.png
+```
+
 
 ### 3) Feature Analysis (Decoding & Visualization)
 
