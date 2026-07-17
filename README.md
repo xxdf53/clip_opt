@@ -60,6 +60,20 @@ python inference.py \
   --model_path ./checkpoints/c2p_clip_genimage/last_model.pth
 ```
 
+Evaluate the official raw state dictionary on all direct and nested generators
+under `CNN_synth_testset`:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
+python scripts/test_airplane_official.py \
+  --dataroot ./CNN_synth_testset \
+  --model_path ./C2P_CLIP_release_20240901.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --batch_size 64 \
+  --gpu 0 \
+  --num_workers 4
+```
+
 ### Logit distribution analysis for self-trained LoRA checkpoints
 
 Baseline model on `my_first_test`:
