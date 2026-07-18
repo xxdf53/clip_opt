@@ -71,8 +71,43 @@ python scripts/test_airplane_official.py \
   --clip_path ./clip-vit-large-patch14 \
   --batch_size 64 \
   --gpu 0 \
-  --num_workers 4
+  --num_workers 4 \
+  --predictions_csv ./official_cnn_synth_predictions.csv
 ```
+
+Evaluate a self-trained baseline LoRA checkpoint through the same recursive,
+image-only dataset and preprocessing pipeline:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
+python scripts/test_checkpoint.py \
+  --dataroot ./CNN_synth_testset \
+  --checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --batch_size 64 --gpu 0 --num_workers 4 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --predictions_csv ./baseline_cnn_synth_predictions.csv
+```
+
+Add the matched local-feature architecture flags for a local checkpoint:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
+python scripts/test_checkpoint.py \
+  --dataroot ./CNN_synth_testset \
+  --checkpoint ./c2p_checkpoints/local/model.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --batch_size 64 --gpu 0 --num_workers 4 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --use_local_features \
+  --local_layer 12 --local_dim 256 \
+  --local_dropout 0.1 --local_pool mean_std \
+  --predictions_csv ./local_cnn_synth_predictions.csv
+```
+
+Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
+raw-logit class statistics, macro means, and overall metrics. Prediction CSVs
+use the shared `generator,path,label,raw_logit,score` schema.
 
 ### Logit distribution analysis for self-trained LoRA checkpoints
 

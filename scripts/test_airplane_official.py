@@ -20,15 +20,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import numpy as np
 import torch
-from torch.utils.data import ConcatDataset, DataLoader
-from torchvision import datasets, transforms
 
-from data.datasets import _TranslateDuplicate, pil_loader
 from scripts.inference import C2P_CLIP
 from utils.binary_dataset_layout import discover_binary_groups
-from utils.binary_metrics import compute_binary_metrics
+from utils.binary_evaluation import (
+    build_group_dataset,
+    build_transform,
+    evaluate_groups,
+    format_diagnostics,
+    format_metrics,
+    write_predictions_csv,
+)
 
 
 def parse_args(argv=None):
@@ -44,6 +47,10 @@ def parse_args(argv=None):
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument(
+        '--predictions_csv',
+        help='optional CSV path for per-image raw logits and scores',
+    )
     args = parser.parse_args(argv)
 
     args.dataroot = args.dataroot or args.legacy_dataroot
@@ -79,35 +86,6 @@ def resolve_device(gpu):
     return torch.device(f'cuda:{gpu}')
 
 
-def build_transform():
-    return transforms.Compose([
-        _TranslateDuplicate(224),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.48145466, 0.4578275, 0.40821073],
-            std=[0.26862954, 0.26130258, 0.27577711],
-        ),
-    ])
-
-
-def build_group_dataset(binary_leaves, transform):
-    leaf_datasets = []
-    for leaf in binary_leaves:
-        dataset = datasets.ImageFolder(
-            root=str(leaf), transform=transform, loader=pil_loader)
-        expected_classes = {'0_real': 0, '1_fake': 1}
-        if dataset.class_to_idx != expected_classes:
-            raise ValueError(
-                f'{leaf} must contain exactly 0_real/ and 1_fake/; '
-                f'found {dataset.class_to_idx}')
-        leaf_datasets.append(dataset)
-
-    if len(leaf_datasets) == 1:
-        return leaf_datasets[0]
-    return ConcatDataset(leaf_datasets)
-
-
 def load_official_model(model_path, clip_path, device):
     print(f'Loading official model: {model_path}')
     state_dict = torch.load(
@@ -126,34 +104,8 @@ def load_official_model(model_path, clip_path, device):
     return model
 
 
-def infer_dataset(model, dataset, args, device):
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        drop_last=False,
-        num_workers=args.num_workers,
-        pin_memory=device.type == 'cuda',
-    )
-    labels = []
-    scores = []
-    with torch.no_grad():
-        for images, batch_labels in loader:
-            images = images.to(device, non_blocking=True)
-            batch_scores = model(images).sigmoid().flatten().cpu().tolist()
-            scores.extend(batch_scores)
-            labels.extend(batch_labels.flatten().tolist())
-    return labels, scores
-
-
-def format_metrics(name, metrics):
-    return (
-        f'{name:20s} n={metrics["n"]:>7d}  '
-        f'ACC={metrics["acc"]:6.2f}%  '
-        f'Real_ACC={metrics["real_acc"]:6.2f}%  '
-        f'Fake_ACC={metrics["fake_acc"]:6.2f}%  '
-        f'AP={metrics["ap"]:6.2f}%'
-    )
+def official_forward_logits(model, images):
+    return model(images)
 
 
 def main(argv=None):
@@ -171,33 +123,31 @@ def main(argv=None):
     print(f'Generators: {len(groups)}')
     print(f'Device: {device}')
     model = load_official_model(model_path, clip_path, device)
-    transform = build_transform()
-
-    all_labels = []
-    all_scores = []
-    group_metrics = []
     start_time = time.time()
     print('\n' + '=' * 92)
-    for index, (group_name, binary_leaves) in enumerate(groups.items()):
-        dataset = build_group_dataset(binary_leaves, transform)
-        labels, scores = infer_dataset(model, dataset, args, device)
-        metrics = compute_binary_metrics(labels, scores)
-        group_metrics.append(metrics)
-        all_labels.extend(labels)
-        all_scores.extend(scores)
-        print(f'[{index:02d}] ' + format_metrics(group_name, metrics))
-
-    macro_metrics = {
-        key: float(np.mean([metrics[key] for metrics in group_metrics]))
-        for key in ('acc', 'real_acc', 'fake_acc', 'ap')
-    }
-    macro_metrics['n'] = sum(metrics['n'] for metrics in group_metrics)
-    overall_metrics = compute_binary_metrics(all_labels, all_scores)
+    summary = evaluate_groups(
+        groups,
+        forward_logits=lambda images: official_forward_logits(model, images),
+        device=device,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        on_group_complete=lambda index, name, metrics, stats: (
+            print(f'[{index:02d}] ' + format_metrics(name, metrics)),
+            print('     ' + format_diagnostics(metrics, stats)),
+        ),
+    )
     elapsed = time.time() - start_time
 
     print('=' * 92)
-    print('     ' + format_metrics('Macro mean', macro_metrics))
-    print('     ' + format_metrics('Overall', overall_metrics))
+    print('     ' + format_metrics('Macro mean', summary['macro_metrics']))
+    print('     ' + format_diagnostics(summary['macro_metrics']))
+    print('     ' + format_metrics('Overall', summary['overall_metrics']))
+    print('     ' + format_diagnostics(
+        summary['overall_metrics'], summary['overall_logit_stats']))
+    if args.predictions_csv:
+        output_path = write_predictions_csv(
+            summary['predictions'], args.predictions_csv)
+        print(f'Predictions: {output_path}')
     print(f'Elapsed: {elapsed:.1f}s ({elapsed / 60:.1f} min)')
 
 

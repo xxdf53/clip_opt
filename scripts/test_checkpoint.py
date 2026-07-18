@@ -29,34 +29,44 @@
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 import time
 import argparse
 import torch
-import numpy as np
-from sklearn.metrics import average_precision_score, accuracy_score, confusion_matrix
 
-from data import create_dataloader
 from networks.trainer import CLIPModel_lora
+from utils.binary_dataset_layout import discover_binary_groups
+from utils.binary_evaluation import (
+    evaluate_groups,
+    format_diagnostics,
+    format_metrics,
+    write_predictions_csv,
+)
 from utils.checkpoint_loading import extract_training_state_dict
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description='Test self-trained C2P-CLIP LoRA checkpoint')
     parser.add_argument('--dataroot',    type=str, required=True,
                         help='test dataset root (e.g., ./UniversalFakeDetect/test/)')
     parser.add_argument('--checkpoint',  type=str,
-                        default=os.path.join(ROOT, 'checkpoints',
+                        default=os.path.join(str(ROOT), 'checkpoints',
                                              'model_epoch_9_total_steps_810_testacc_50.069.pth'),
                         help='path to .pth checkpoint')
     parser.add_argument('--clip_path',   type=str,
-                        default=os.path.join(ROOT, 'clip-vit-large-patch14'),
+                        default=os.path.join(str(ROOT), 'clip-vit-large-patch14'),
                         help='path to CLIP ViT-L/14 model')
     parser.add_argument('--batch_size',  type=int, default=64)
     parser.add_argument('--gpu',         type=int, default=0)
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument(
+        '--predictions_csv',
+        help='optional CSV path for per-image raw logits and scores',
+    )
     parser.add_argument('--lora_r',      type=int, default=16)
     parser.add_argument('--lora_alpha',  type=int, default=32)
     parser.add_argument('--lora_dropout',type=float, default=0.1)
@@ -66,7 +76,12 @@ def parse_args():
     parser.add_argument('--local_dropout', type=float, default=0.1)
     parser.add_argument('--local_pool', choices=['mean', 'mean_std'],
                         default='mean_std')
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.batch_size <= 0:
+        parser.error('--batch_size must be positive')
+    if args.num_workers < 0:
+        parser.error('--num_workers cannot be negative')
+    return args
 
 
 def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
@@ -113,66 +128,43 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
     return model
 
 
-class OptForDataLoader:
-    """构造 DataLoader 所需的最小配置对象（模拟 TestOptions）"""
-    def __init__(self, dataroot, batch_size, clip_path):
-        self.dataroot      = dataroot + os.sep
-        self.imgroot       = dataroot + os.sep
-        self.textroot      = os.path.join(ROOT, 'Genimage_CNNDetection_CLIP_prefix_caption', 'train')
-        self.clip          = clip_path
-        self.mode          = 'binary'
-        self.isTrain       = False
-        self.batch_size    = batch_size
-        self.loadSize      = 224
-        self.cropSize      = 224
-        self.no_resize     = False
-        self.no_crop       = False
-        self.no_flip       = True
-        self.serial_batches = True
-        self.class_bal     = False
-        self.num_threads   = 4
-        self.classes       = []
-        self.rz_interp     = ['bilinear']
-        self.blur_prob     = 0
-        self.blur_sig      = [0.5]
-        self.jpg_prob      = 0
-        self.jpg_method    = ['pil']
-        self.jpg_qual      = [75]
+def resolve_existing_path(path, description, expect_directory):
+    resolved = Path(path).expanduser().resolve()
+    exists = resolved.is_dir() if expect_directory else resolved.is_file()
+    if not exists:
+        expected = 'directory' if expect_directory else 'file'
+        raise FileNotFoundError(
+            f'{description} {expected} not found: {resolved}')
+    return resolved
 
 
-def test_one_dir(model, dataroot, batch_size, clip_path, device):
-    """对单个目录（含 0_real/1_fake 子文件夹）做推理，返回 (acc, ap, r_acc, f_acc, cm, n)"""
-    dl_opt = OptForDataLoader(dataroot, batch_size, clip_path)
-    data_loader = create_dataloader(dl_opt)
-    n_images = len(data_loader.dataset)
-
-    y_true, y_pred = [], []
-    with torch.no_grad():
-        for batch in data_loader:
-            # batch = (path, img, text, input_ids, attention_mask, label)
-            img, label = batch[1].to(device), batch[5]
-            # cla=True → 只走分类头，跳过对比损失分支
-            logits = model(img, None, None, cla=True)
-            y_pred.extend(logits.sigmoid().flatten().cpu().tolist())
-            y_true.extend(label.flatten().tolist())
-
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-    cm = confusion_matrix(y_true, y_pred > 0.5)
-    acc  = accuracy_score(y_true, y_pred > 0.5) * 100
-    r_acc = accuracy_score(y_true[y_true == 0], y_pred[y_true == 0] > 0.5) * 100
-    f_acc = accuracy_score(y_true[y_true == 1], y_pred[y_true == 1] > 0.5) * 100
-    ap   = average_precision_score(y_true, y_pred) * 100
-    return acc, ap, r_acc, f_acc, cm, n_images
+def resolve_device(gpu):
+    if not torch.cuda.is_available():
+        print('CUDA is unavailable; using CPU.')
+        return torch.device('cpu')
+    if gpu < 0 or gpu >= torch.cuda.device_count():
+        raise ValueError(
+            f'gpu must be in [0, {torch.cuda.device_count() - 1}], got {gpu}')
+    return torch.device(f'cuda:{gpu}')
 
 
-if __name__ == '__main__':
-    args = parse_args()
-    device = torch.device(f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu')
+def lora_forward_logits(model, images):
+    return model(images, None, None, cla=True)
 
-    # ── 1. 加载模型 ──
+
+def main(argv=None):
+    args = parse_args(argv)
+    dataroot = resolve_existing_path(
+        args.dataroot, 'dataset root', expect_directory=True)
+    checkpoint = resolve_existing_path(
+        args.checkpoint, 'checkpoint', expect_directory=False)
+    clip_path = resolve_existing_path(
+        args.clip_path, 'CLIP model', expect_directory=True)
+    groups = discover_binary_groups(dataroot)
+    device = resolve_device(args.gpu)
+
     model = load_checkpoint(
-        args.checkpoint, args.clip_path,
+        str(checkpoint), str(clip_path),
         args.lora_r, args.lora_alpha, args.lora_dropout, device,
         use_local_features=args.use_local_features,
         local_layer=args.local_layer,
@@ -181,51 +173,37 @@ if __name__ == '__main__':
         local_pool=args.local_pool,
     )
 
-    dataroot = args.dataroot.rstrip('/').rstrip('\\')
-
-    # ── 2. 判断测试目录结构 ──
-    # 情况 A: dataroot 下直接有 0_real/1_fake → 单个测试集
-    # 情况 B: dataroot 下有多个子文件夹（如 UniversalFakeDetect/test/airplane/, ...）
-    #        每个子文件夹内含 0_real/1_fake → 多子集汇总
-    subdirs = sorted(os.listdir(dataroot))
-    has_real_fake = '0_real' in subdirs or '1_fake' in subdirs
-
-    if has_real_fake:
-        # 情况 A: 单数据集
-        test_sets = {os.path.basename(dataroot): dataroot}
-    else:
-        # 情况 B: 多子集
-        test_sets = {}
-        for d in subdirs:
-            full = os.path.join(dataroot, d)
-            if os.path.isdir(full):
-                test_sets[d] = full
-
-    # ── 3. 逐子集测试 ──
-    print(f'\n{"="*60}')
-    print(f'Testing on: {dataroot}')
-    print(f'Test subsets: {len(test_sets)}')
-    print(f'Model: {args.checkpoint}')
-    print(f'{"="*60}\n')
-
-    all_accs, all_aps = [], []
+    print(f'Dataset: {dataroot}')
+    print(f'Generators: {len(groups)}')
+    print(f'Device: {device}')
+    print(f'Model: {checkpoint}')
     t_start = time.time()
-
-    for idx, (name, path) in enumerate(test_sets.items()):
-        acc, ap, r_acc, f_acc, cm, n = test_one_dir(
-            model, path, args.batch_size, args.clip_path, device
-        )
-        all_accs.append(acc)
-        all_aps.append(ap)
-        print(f"({idx:2d} | {name:20s})  n={n:>7d}  "
-              f"ACC={acc:6.2f}%  Real_ACC={r_acc:6.2f}%  Fake_ACC={f_acc:6.2f}%  AP={ap:6.2f}%")
-
+    print('\n' + '=' * 92)
+    summary = evaluate_groups(
+        groups,
+        forward_logits=lambda images: lora_forward_logits(model, images),
+        device=device,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        on_group_complete=lambda index, name, metrics, stats: (
+            print(f'[{index:02d}] ' + format_metrics(name, metrics)),
+            print('     ' + format_diagnostics(metrics, stats)),
+        ),
+    )
     elapsed = time.time() - t_start
 
-    # ── 4. 汇总 ──
-    print(f'\n{"="*60}')
-    mean_acc = np.mean(all_accs) if all_accs else 0
-    mean_ap  = np.mean(all_aps) if all_aps else 0
-    print(f'{"Mean":>24s}  ACC={mean_acc:6.2f}%  AP={mean_ap:6.2f}%')
-    print(f'Elapsed: {elapsed:.1f}s ({elapsed/60:.1f} min)')
-    print(f'{"="*60}')
+    print('=' * 92)
+    print('     ' + format_metrics('Macro mean', summary['macro_metrics']))
+    print('     ' + format_diagnostics(summary['macro_metrics']))
+    print('     ' + format_metrics('Overall', summary['overall_metrics']))
+    print('     ' + format_diagnostics(
+        summary['overall_metrics'], summary['overall_logit_stats']))
+    if args.predictions_csv:
+        output_path = write_predictions_csv(
+            summary['predictions'], args.predictions_csv)
+        print(f'Predictions: {output_path}')
+    print(f'Elapsed: {elapsed:.1f}s ({elapsed / 60:.1f} min)')
+
+
+if __name__ == '__main__':
+    main()

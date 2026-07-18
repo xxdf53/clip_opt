@@ -15,6 +15,17 @@ class BinaryMetricsTests(unittest.TestCase):
         self.assertEqual(metrics['real_acc'], 100.0)
         self.assertEqual(metrics['fake_acc'], 100.0)
         self.assertEqual(metrics['ap'], 100.0)
+        self.assertEqual(metrics['roc_auc'], 100.0)
+        self.assertAlmostEqual(metrics['brier'], 0.085)
+
+    def test_reports_expected_calibration_error(self):
+        metrics = compute_binary_metrics(
+            labels=[0, 0, 1, 1],
+            scores=[0.1, 0.2, 0.8, 0.9],
+            ece_bins=2,
+        )
+
+        self.assertAlmostEqual(metrics['ece'], 15.0)
 
     def test_reports_class_specific_accuracy(self):
         metrics = compute_binary_metrics(
