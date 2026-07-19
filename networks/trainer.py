@@ -2,8 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from networks.base_model import BaseModel
+from utils.checkpoint_loading import (
+    extract_training_state_dict,
+    select_baseline_initialization_state,
+)
+from utils.local_objectives import (
+    confidence_preservation_loss,
+    gate_sparsity_loss,
+    pairwise_ranking_loss,
+)
 
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPModel
 from peft import LoraConfig, get_peft_model
 
 
@@ -17,13 +26,11 @@ class CLIPModel_lora(nn.Module):
                  freeze_vision_lora=False):
         super(CLIPModel_lora, self).__init__()
         self.model        = CLIPModel.from_pretrained(name)
-        self.processor    = CLIPProcessor.from_pretrained(name)
         self.vision_tower = self.model.vision_model
         self.vision_tower.requires_grad_(False)
         self.model.text_model.requires_grad_(False)
         self.model.visual_projection.requires_grad_(False)
         self.model.text_projection.requires_grad_(False)
-        self.contrastive_loss = nn.CrossEntropyLoss()
         self.model.logit_scale.requires_grad_(False)
         lora_config = LoraConfig(
                 r=lora_r,
@@ -51,11 +58,13 @@ class CLIPModel_lora(nn.Module):
             if self.local_pool not in ('mean', 'mean_std'):
                 raise ValueError(
                     f"local_pool must be 'mean' or 'mean_std', got {self.local_pool}")
-            if self.local_fusion not in ('concat', 'residual_gate'):
+            if self.local_fusion not in (
+                    'concat', 'residual_gate', 'adaptive_residual'):
                 raise ValueError(
-                    "local_fusion must be 'concat' or 'residual_gate', "
+                    'unsupported local_fusion: '
                     f'got {self.local_fusion}')
-            if not 0.0 < local_gate_init < 1.0:
+            if (self.local_fusion != 'concat'
+                    and not 0.0 < local_gate_init < 1.0):
                 raise ValueError(
                     f'local_gate_init must be in (0, 1), got {local_gate_init}')
 
@@ -76,23 +85,27 @@ class CLIPModel_lora(nn.Module):
                     nn.Linear(256, num_classes),
                 )
             else:
-                # Preserve the baseline global classifier and let the local
-                # branch learn only a bounded residual correction. A small
-                # initial gate avoids disrupting the global logit scale at the
-                # beginning of training.
                 self.model.fc = nn.Linear(projection_dim, num_classes)
                 self.local_classifier = nn.Linear(local_dim, num_classes)
                 gate_probability = torch.tensor(
                     float(local_gate_init), dtype=torch.float32)
-                self.local_gate_logit = nn.Parameter(
-                    torch.logit(gate_probability))
+                gate_bias = torch.logit(gate_probability)
+                if self.local_fusion == 'residual_gate':
+                    # Compatibility path for the first scalar-gate experiment.
+                    self.local_gate_logit = nn.Parameter(gate_bias)
+                else:
+                    gate_input_dim = projection_dim + local_dim + 2
+                    self.local_gate_network = nn.Linear(gate_input_dim, 1)
+                    nn.init.zeros_(self.local_gate_network.weight)
+                    nn.init.constant_(
+                        self.local_gate_network.bias, gate_bias.item())
         else:
             self.model.fc = nn.Linear(projection_dim, num_classes)
 
         self.model.fc.apply(self._init_linear)
         if self.use_local_features:
             self.local_projector.apply(self._init_linear)
-            if self.local_fusion == 'residual_gate':
+            if self.local_fusion in ('residual_gate', 'adaptive_residual'):
                 self.local_classifier.apply(self._init_linear)
 
     @staticmethod
@@ -142,33 +155,88 @@ class CLIPModel_lora(nn.Module):
         local_features = self.local_projector(local_stats)
         return image_features, local_features
 
-    def classify(self, image_features, local_features):
+    def classification_outputs(self, image_features, local_features,
+                               gate_override=None):
         image_features = F.normalize(image_features, p=2, dim=-1)
         if not self.use_local_features:
-            return image_features, self.model.fc(image_features)
+            global_logits = self.model.fc(image_features)
+            return image_features, {
+                'final_logits': global_logits,
+                'global_logits': global_logits,
+            }
 
         local_features = F.normalize(local_features, p=2, dim=-1)
         if self.local_fusion == 'concat':
             fused_features = torch.cat((image_features, local_features), dim=-1)
-            return image_features, self.model.fc(fused_features)
+            return image_features, {
+                'final_logits': self.model.fc(fused_features),
+            }
 
         global_logits = self.model.fc(image_features)
         local_logits = self.local_classifier(local_features)
-        gate = torch.sigmoid(self.local_gate_logit)
-        return image_features, global_logits + gate * local_logits
+        if self.local_fusion == 'residual_gate':
+            learned_gate = torch.sigmoid(self.local_gate_logit).expand_as(
+                global_logits)
+        else:
+            gate_inputs = torch.cat((
+                image_features.detach(),
+                local_features.detach(),
+                global_logits.detach().abs(),
+                (local_logits.detach() - global_logits.detach()).abs(),
+            ), dim=-1)
+            learned_gate = torch.sigmoid(
+                self.local_gate_network(gate_inputs))
+
+        if gate_override is None:
+            gate = learned_gate
+        else:
+            if not 0.0 <= float(gate_override) <= 1.0:
+                raise ValueError('gate_override must be in [0, 1]')
+            gate = torch.full_like(learned_gate, float(gate_override))
+
+        final_logits = global_logits + gate * local_logits
+        outputs = {
+            'final_logits': final_logits,
+            'global_logits': global_logits,
+            'local_logits': local_logits,
+            'gate': gate,
+        }
+        if gate_override is not None:
+            outputs['learned_gate'] = learned_gate
+        return image_features, outputs
+
+    def classify(self, image_features, local_features, gate_override=None):
+        image_features, outputs = self.classification_outputs(
+            image_features, local_features, gate_override=gate_override)
+        return image_features, outputs['final_logits']
+
+    def forward_components(self, img, gate_override=None):
+        image_features, local_features = self.encode_image(img)
+        _, outputs = self.classification_outputs(
+            image_features, local_features, gate_override=gate_override)
+        return outputs
 
     def local_gate_value(self):
-        """Return the current residual gate, or None for non-gated models."""
+        """Return the legacy scalar gate; adaptive gates require an image."""
         if not self.use_local_features or self.local_fusion != 'residual_gate':
             return None
         return torch.sigmoid(self.local_gate_logit)
+
+    def freeze_global_parameters(self):
+        """Protect the initialized baseline while training local corrections."""
+        self.vision_tower_lora.requires_grad_(False)
+        self.model.fc.requires_grad_(False)
     
-    def forward(self, img, input_ids, attention_mask, cla=False):
+    def forward(self, img, input_ids, attention_mask, cla=False,
+                return_components=False, gate_override=None):
         # tmp = x; print(f'x: {tmp.shape}, max: {tmp.max()}, min: {tmp.min()}, mean: {tmp.mean()}')
 
         image_features, local_features = self.encode_image(img)
-        image_embeds, classhead = self.classify(image_features, local_features)
-        if cla: return classhead 
+        image_embeds, outputs = self.classification_outputs(
+            image_features, local_features, gate_override=gate_override)
+        classhead = outputs['final_logits']
+        if cla:
+            return outputs if return_components else classhead
         
         text_embeds  = self.encode_text(input_ids, attention_mask)
         text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
@@ -177,12 +245,13 @@ class CLIPModel_lora(nn.Module):
         logits_per_text = torch.matmul(text_embeds, image_embeds.t()) * self.model.logit_scale.exp()
         logits_per_image = logits_per_text.t()
 
+        if return_components:
+            return logits_per_image, classhead.squeeze(1), outputs
         return logits_per_image, classhead.squeeze(1)
     
-    def forward_eval(self, img):
-        image_features, local_features = self.encode_image(img)
-        _, classhead = self.classify(image_features, local_features)
-        return classhead 
+    def forward_eval(self, img, gate_override=None):
+        return self.forward_components(
+            img, gate_override=gate_override)['final_logits']
 
 class Trainer(BaseModel):
     def name(self):
@@ -193,8 +262,11 @@ class Trainer(BaseModel):
 
         self.delr = opt.delr
         self.claloss = opt.claloss
+        self.rank_loss_weight = opt.rank_loss_weight
+        self.preserve_loss_weight = opt.preserve_loss_weight
+        self.gate_loss_weight = opt.gate_loss_weight
+        self.freeze_global_branch = opt.freeze_global_branch
         
-        self.printOne = 1
         self.model = CLIPModel_lora(
             name=opt.clip,
             lora_r=opt.lora_r,
@@ -209,6 +281,40 @@ class Trainer(BaseModel):
             local_gate_init=opt.local_gate_init,
             freeze_vision_lora=opt.freeze_vision_lora,
         )
+
+        if opt.init_baseline_checkpoint:
+            payload = torch.load(
+                opt.init_baseline_checkpoint,
+                map_location='cpu',
+                weights_only=True,
+            )
+            baseline_state, baseline_steps = extract_training_state_dict(payload)
+            compatible_state = select_baseline_initialization_state(
+                baseline_state, self.model.state_dict())
+            self.model.load_state_dict(compatible_state, strict=False)
+            print(
+                f'Initialized global branch from {opt.init_baseline_checkpoint} '
+                f'({len(compatible_state)} tensors, '
+                f'total_steps={baseline_steps if baseline_steps is not None else "unknown"})')
+
+        if self.freeze_global_branch:
+            if not opt.init_baseline_checkpoint and not opt.continue_train:
+                raise ValueError(
+                    '--freeze_global_branch requires a baseline checkpoint '
+                    'for a new run')
+            self.model.freeze_global_parameters()
+
+        auxiliary_weights = (
+            self.preserve_loss_weight,
+            self.gate_loss_weight,
+        )
+        if any(weight < 0 for weight in (
+                self.rank_loss_weight,) + auxiliary_weights):
+            raise ValueError('auxiliary loss weights cannot be negative')
+        if (any(auxiliary_weights)
+                and opt.local_fusion != 'adaptive_residual'):
+            raise ValueError(
+                'preserve/gate losses require --local_fusion adaptive_residual')
 
         net_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(
@@ -248,7 +354,11 @@ class Trainer(BaseModel):
 
     def set_input(self, input):
         self.input           = input[1].cuda()
-        self.text            = input[2]
+        if self.freeze_global_branch:
+            self.input_ids = None
+            self.attention_mask = None
+            self.label = input[5].cuda().float()
+            return
         # Handle multiprocessing collate edge case: input_ids / attention_mask
         # may arrive as tuples of tensors instead of stacked tensors
         if isinstance(input[3], (tuple, list)):
@@ -263,7 +373,18 @@ class Trainer(BaseModel):
 
 
     def forward(self):
-        self.output, self.classhead = self.model( self.input, self.input_ids, self.attention_mask )
+        if self.freeze_global_branch:
+            self.components = self.model(
+                self.input, None, None, cla=True, return_components=True)
+            self.output = None
+            self.classhead = self.components['final_logits'].squeeze(1)
+        else:
+            self.output, self.classhead, self.components = self.model(
+                self.input,
+                self.input_ids,
+                self.attention_mask,
+                return_components=True,
+            )
 
         
     def contrastive_loss(self, logits: torch.Tensor) -> torch.Tensor:
@@ -272,22 +393,44 @@ class Trainer(BaseModel):
         image_loss   = nn.functional.cross_entropy(logits.t(), torch.arange(len(logits), device=logits.device))
         return (caption_loss + image_loss) / 2.0
         
-    def get_loss(self):
-        return self.model.clip_loss_input(self.input, self.text)
-
     def optimize_parameters(self):
         self.forward()
-        
-        self.loss1 = sum([self.contrastive_loss(output) for output in torch.split(self.output, self.output.shape[1], dim=0)])
+
+        if self.output is None:
+            self.loss1 = self.classhead.new_zeros(())
+        else:
+            self.loss1 = sum([
+                self.contrastive_loss(output)
+                for output in torch.split(
+                    self.output, self.output.shape[1], dim=0)
+            ])
         self.loss2 = self.claloss * self.loss_fn(self.classhead, self.label)
-        self.loss  = self.loss1 + self.loss2
-        # self.loss1, self.loss2 = 0.0, 0.0
-        # self.loss  = self.loss_fn(self.classhead, self.label)
+        self.loss_rank = self.rank_loss_weight * pairwise_ranking_loss(
+            self.classhead, self.label)
+        zero = self.classhead.new_zeros(())
+        if 'gate' in self.components:
+            self.loss_preserve = (
+                self.preserve_loss_weight * confidence_preservation_loss(
+                    self.components['final_logits'],
+                    self.components['global_logits'],
+                )
+            )
+            self.loss_gate = self.gate_loss_weight * gate_sparsity_loss(
+                self.components['gate'])
+        else:
+            self.loss_preserve = zero
+            self.loss_gate = zero
+        self.loss = (
+            self.loss1 + self.loss2 + self.loss_rank
+            + self.loss_preserve + self.loss_gate
+        )
         self.optimizer.zero_grad()
         self.loss.backward()
         self.optimizer.step()
 
     def get_local_gate_value(self):
+        if hasattr(self, 'components') and 'gate' in self.components:
+            return self.components['gate'].detach().mean().item()
         core_model = (
             self.model.module if isinstance(self.model, nn.DataParallel)
             else self.model

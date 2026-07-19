@@ -47,7 +47,9 @@ from utils.binary_evaluation import (
     write_predictions_csv,
 )
 from utils.checkpoint_loading import (
+    LOCAL_FUSIONS,
     extract_training_state_dict,
+    parse_gate_override,
     resolve_local_fusion,
 )
 
@@ -80,11 +82,15 @@ def parse_args(argv=None):
     parser.add_argument('--local_pool', choices=['mean', 'mean_std'],
                         default='mean_std')
     parser.add_argument('--local_fusion',
-                        choices=['auto', 'concat', 'residual_gate'],
+                        choices=['auto'] + list(LOCAL_FUSIONS),
                         default='auto',
-                        help='auto-detect legacy concat or residual-gate checkpoints')
+                        help='auto-detect the local fusion from checkpoint keys')
     parser.add_argument('--local_gate_init', type=float, default=0.01,
                         help='constructor value; checkpoint restores the learned gate')
+    parser.add_argument(
+        '--gate_override', type=parse_gate_override, default=None,
+        metavar='learned|FLOAT',
+        help='use learned gates or force every gate to a value in [0, 1]')
     args = parser.parse_args(argv)
     if args.batch_size <= 0:
         parser.error('--batch_size must be positive')
@@ -171,8 +177,8 @@ def resolve_device(gpu):
     return torch.device(f'cuda:{gpu}')
 
 
-def lora_forward_logits(model, images):
-    return model(images, None, None, cla=True)
+def lora_forward_logits(model, images, gate_override=None):
+    return model.forward_components(images, gate_override=gate_override)
 
 
 def main(argv=None):
@@ -197,16 +203,25 @@ def main(argv=None):
         local_fusion=args.local_fusion,
         local_gate_init=args.local_gate_init,
     )
+    if (args.gate_override is not None
+            and model.local_fusion not in (
+                'residual_gate', 'adaptive_residual')):
+        raise ValueError('--gate_override requires a gated local checkpoint')
 
     print(f'Dataset: {dataroot}')
     print(f'Generators: {len(groups)}')
     print(f'Device: {device}')
     print(f'Model: {checkpoint}')
+    if model.local_fusion in ('residual_gate', 'adaptive_residual'):
+        print('Gate mode: ' + (
+            'learned' if args.gate_override is None
+            else f'fixed {args.gate_override:.6f}'))
     t_start = time.time()
     print('\n' + '=' * 92)
     summary = evaluate_groups(
         groups,
-        forward_logits=lambda images: lora_forward_logits(model, images),
+        forward_logits=lambda images: lora_forward_logits(
+            model, images, gate_override=args.gate_override),
         device=device,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -223,6 +238,22 @@ def main(argv=None):
     print('     ' + format_metrics('Overall', summary['overall_metrics']))
     print('     ' + format_diagnostics(
         summary['overall_metrics'], summary['overall_logit_stats']))
+    gate_field = (
+        'learned_gate'
+        if any('learned_gate' in record for record in summary['predictions'])
+        else 'gate'
+    )
+    gates = [
+        record[gate_field] for record in summary['predictions']
+        if gate_field in record
+    ]
+    if gates:
+        gate_tensor = torch.tensor(gates)
+        print(
+            '     Learned gate          '
+            f'mean={gate_tensor.mean():.6f}  '
+            f'std={gate_tensor.std(unbiased=False):.6f}  '
+            f'min={gate_tensor.min():.6f}  max={gate_tensor.max():.6f}')
     if args.predictions_csv:
         output_path = write_predictions_csv(
             summary['predictions'], args.predictions_csv)

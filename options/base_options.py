@@ -66,11 +66,21 @@ class BaseOptions():
                             choices=['mean', 'mean_std'],
                             help='statistics used to aggregate patch tokens')
         parser.add_argument('--local_fusion', type=str,
-                            default='residual_gate',
-                            choices=['concat', 'residual_gate'],
-                            help='local/global classifier fusion; concat is the legacy implementation')
+                            default='adaptive_residual',
+                            choices=['concat', 'residual_gate', 'adaptive_residual'],
+                            help='local/global classifier fusion; the first two modes are retained for old checkpoints')
         parser.add_argument('--local_gate_init', type=float, default=0.01,
                             help='initial residual-gate value in (0, 1)')
+        parser.add_argument('--init_baseline_checkpoint', type=str, default='',
+                            help='train.py baseline checkpoint used to initialize the protected global branch')
+        parser.add_argument('--freeze_global_branch', action='store_true',
+                            help='freeze initialized global LoRA and classifier while training the local residual')
+        parser.add_argument('--rank_loss_weight', type=float, default=0.0,
+                            help='weight of pairwise real/fake ranking loss')
+        parser.add_argument('--preserve_loss_weight', type=float, default=0.0,
+                            help='weight of confidence-aware residual preservation loss')
+        parser.add_argument('--gate_loss_weight', type=float, default=0.0,
+                            help='weight of gate sparsity regularization')
         parser.add_argument('--freeze_vision_lora', action='store_true',
                             help='freeze CLIP vision LoRA and train only newly added heads')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -123,8 +133,16 @@ class BaseOptions():
             opt.name += '__local_layer_{}__pool_{}__dim_{}__fusion_{}'.format(
                 opt.local_layer, opt.local_pool, opt.local_dim,
                 opt.local_fusion)
-            if opt.local_fusion == 'residual_gate':
+            if opt.local_fusion in ('residual_gate', 'adaptive_residual'):
                 opt.name += '__gate_{}'.format(opt.local_gate_init)
+            if opt.local_fusion == 'adaptive_residual':
+                opt.name += '__rank_{}__preserve_{}__gate_reg_{}'.format(
+                    opt.rank_loss_weight,
+                    opt.preserve_loss_weight,
+                    opt.gate_loss_weight,
+                )
+            if opt.freeze_global_branch:
+                opt.name += '__frozen_global'
             if opt.freeze_vision_lora:
                 opt.name += '__frozen_vision_lora'
 

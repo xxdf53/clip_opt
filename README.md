@@ -50,9 +50,10 @@ conda activate c2pclip
 ./train_UniversalFakeDetect.sh
 ```
 
-New local-feature experiments use a gated residual classifier by default. The
-global branch keeps the baseline linear classifier, while the local branch is
-added as a small learnable residual whose initial gate is `0.01`:
+New local-feature experiments use an image-adaptive residual gate. Initialize
+the global LoRA and classifier from a matched baseline checkpoint, freeze them,
+and train only the patch residual and gate. The gate starts at `0.01`, so the
+initial prediction remains close to the protected baseline:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -61,20 +62,26 @@ python scripts/train.py \
   --textroot ./prefix_caption \
   --classes car,cat,chair,horse \
   --clip ./clip-vit-large-patch14 \
-  --gpu_ids 0,1 --batch_size 64 --keep_last_batch \
-  --total_steps 2251 --lr 0.0002 --claloss 8.0 \
+  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
+  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
+  --init_baseline_checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --freeze_global_branch \
   --use_local_features \
   --local_layer 12 --local_dim 256 \
   --local_dropout 0.1 --local_pool mean_std \
-  --local_fusion residual_gate --local_gate_init 0.01 \
-  --name c2p_local_residual_gate
+  --local_fusion adaptive_residual --local_gate_init 0.01 \
+  --rank_loss_weight 1.0 \
+  --preserve_loss_weight 0.1 \
+  --gate_loss_weight 0.01 \
+  --name c2p_local_adaptive_residual
 ```
 
-Use `--local_fusion concat` only to reproduce the legacy direct-concatenation
-local model. Training logs print the learned `local_gate` at each loss-report
-step.
+The initialization checkpoint must be a non-local model with matching CLIP and
+LoRA dimensions. `concat` and scalar `residual_gate` modes remain available
+only for loading and reproducing earlier experiments. Training logs report all
+auxiliary losses and the mean adaptive gate for the current global batch.
 
 ### 2) Inference / Testing
 
@@ -132,13 +139,15 @@ python scripts/test_checkpoint.py \
   --predictions_csv ./local_cnn_synth_predictions.csv
 ```
 
-`--local_fusion auto` detects both legacy `concat` checkpoints and new
-`residual_gate` checkpoints from their state-dict keys. An explicit mismatched
-fusion mode fails before strict state-dict loading with a focused error.
+`--local_fusion auto` detects legacy `concat`, scalar `residual_gate`, and new
+`adaptive_residual` checkpoints from their state-dict keys. An explicit
+mismatched fusion mode fails before strict state-dict loading.
 
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
-raw-logit class statistics, macro means, and overall metrics. Prediction CSVs
-use the shared `generator,path,label,raw_logit,score` schema.
+raw-logit class statistics, macro means, and overall metrics. Gated local-model
+CSVs additionally contain `global_logit`, `local_logit`, and `gate`; forced-gate
+runs also retain `learned_gate`. To diagnose one checkpoint without retraining,
+repeat the test with `--gate_override 0`, `0.01`, or `learned`.
 
 ### Logit distribution analysis for self-trained LoRA checkpoints
 

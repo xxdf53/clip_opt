@@ -40,6 +40,18 @@ class EvaluationCliTests(unittest.TestCase):
         self.assertEqual(args.local_fusion, 'residual_gate')
         self.assertAlmostEqual(args.local_gate_init, 0.02)
 
+    def test_lora_cli_accepts_adaptive_gate_override(self):
+        args = test_checkpoint.parse_args([
+            '--dataroot', 'dataset',
+            '--checkpoint', 'model.pth',
+            '--use_local_features',
+            '--local_fusion', 'adaptive_residual',
+            '--gate_override', '0',
+        ])
+
+        self.assertEqual(args.local_fusion, 'adaptive_residual')
+        self.assertEqual(args.gate_override, 0.0)
+
     def test_forward_adapters_preserve_model_specific_signatures(self):
         images = torch.zeros(2, 3, 4, 4)
 
@@ -49,9 +61,9 @@ class EvaluationCliTests(unittest.TestCase):
                 return torch.ones(2, 1)
 
         class LoraModel:
-            def __call__(self, *args, **kwargs):
+            def forward_components(self, *args, **kwargs):
                 self.call = (args, kwargs)
-                return torch.ones(2, 1)
+                return {'final_logits': torch.ones(2, 1)}
 
         official = OfficialModel()
         lora = LoraModel()
@@ -60,7 +72,10 @@ class EvaluationCliTests(unittest.TestCase):
         test_checkpoint.lora_forward_logits(lora, images)
 
         self.assertEqual(official.call, (images,))
-        self.assertEqual(lora.call, ((images, None, None), {'cla': True}))
+        self.assertEqual(
+            lora.call,
+            ((images,), {'gate_override': None}),
+        )
 
 
 if __name__ == '__main__':

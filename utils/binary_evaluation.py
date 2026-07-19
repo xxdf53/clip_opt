@@ -19,6 +19,13 @@ PREDICTION_FIELDS = (
     'raw_logit',
     'score',
 )
+OUTPUT_COMPONENT_FIELDS = {
+    'global_logits': 'global_logit',
+    'local_logits': 'local_logit',
+    'gate': 'gate',
+    'learned_gate': 'learned_gate',
+}
+COMPONENT_FIELDS = tuple(OUTPUT_COMPONENT_FIELDS.values())
 
 
 def format_metrics(name, metrics):
@@ -119,25 +126,43 @@ def evaluate_dataset(dataset, generator, forward_logits, device,
     with torch.no_grad():
         for images, labels, paths in loader:
             images = images.to(device, non_blocking=True)
-            logits = forward_logits(images)
-            if not isinstance(logits, torch.Tensor):
-                raise TypeError('forward_logits must return a torch.Tensor')
-            logits = logits.detach().flatten().cpu()
+            forward_output = forward_logits(images)
+            if isinstance(forward_output, torch.Tensor):
+                batch_outputs = {'final_logits': forward_output}
+            elif isinstance(forward_output, Mapping):
+                batch_outputs = forward_output
+            else:
+                raise TypeError(
+                    'forward_logits must return a tensor or component mapping')
+            if 'final_logits' not in batch_outputs:
+                raise ValueError('component mapping must contain final_logits')
+
             labels = labels.detach().flatten().cpu()
-            if logits.numel() != labels.numel():
-                raise ValueError(
-                    'forward_logits output size must match the label batch size'
-                )
+            normalized_outputs = {}
+            for name, values in batch_outputs.items():
+                if not isinstance(values, torch.Tensor):
+                    continue
+                values = values.detach().flatten().cpu()
+                if values.numel() != labels.numel():
+                    raise ValueError(
+                        f'{name} output size must match the label batch size')
+                normalized_outputs[name] = values
+            logits = normalized_outputs['final_logits']
             scores = logits.sigmoid()
-            for path, label, raw_logit, score in zip(
-                    paths, labels.tolist(), logits.tolist(), scores.tolist()):
-                predictions.append({
+            for index, (path, label, raw_logit, score) in enumerate(zip(
+                    paths, labels.tolist(), logits.tolist(), scores.tolist())):
+                record = {
                     'generator': generator,
                     'path': str(Path(path).resolve()),
                     'label': int(label),
                     'raw_logit': float(raw_logit),
                     'score': float(score),
-                })
+                }
+                for output_name, field_name in OUTPUT_COMPONENT_FIELDS.items():
+                    if output_name in normalized_outputs:
+                        record[field_name] = float(
+                            normalized_outputs[output_name][index])
+                predictions.append(record)
     return predictions
 
 
@@ -222,8 +247,13 @@ def write_predictions_csv(predictions, output_path):
     """Write the shared per-image prediction format."""
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    component_fields = tuple(
+        field for field in COMPONENT_FIELDS
+        if any(field in record for record in predictions)
+    )
+    fieldnames = PREDICTION_FIELDS[:3] + component_fields + PREDICTION_FIELDS[3:]
     with output_path.open('w', newline='', encoding='utf-8') as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=PREDICTION_FIELDS)
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(predictions)
     return output_path

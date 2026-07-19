@@ -47,7 +47,9 @@ from torchvision import datasets, transforms
 from data.datasets import _TranslateDuplicate, pil_loader
 from networks.trainer import CLIPModel_lora
 from utils.checkpoint_loading import (
+    LOCAL_FUSIONS,
     extract_training_state_dict,
+    parse_gate_override,
     resolve_local_fusion,
 )
 from utils.logit_distribution import build_shared_bin_edges, compute_logit_stats
@@ -70,7 +72,10 @@ def parse_args(argv=None):
     parser.add_argument('--compare_use_local_features', action='store_true')
     parser.add_argument(
         '--compare_local_fusion',
-        choices=['auto', 'concat', 'residual_gate'], default='auto')
+        choices=['auto'] + list(LOCAL_FUSIONS), default='auto')
+    parser.add_argument(
+        '--compare_gate_override', type=parse_gate_override, default=None,
+        metavar='learned|FLOAT')
     parser.add_argument(
         '--clip_path', default=str(ROOT / 'clip-vit-large-patch14'),
         help='local CLIP ViT-L/14 model directory')
@@ -87,9 +92,12 @@ def parse_args(argv=None):
     parser.add_argument(
         '--local_pool', choices=['mean', 'mean_std'], default='mean_std')
     parser.add_argument(
-        '--local_fusion', choices=['auto', 'concat', 'residual_gate'],
+        '--local_fusion', choices=['auto'] + list(LOCAL_FUSIONS),
         default='auto')
     parser.add_argument('--local_gate_init', type=float, default=0.01)
+    parser.add_argument(
+        '--gate_override', type=parse_gate_override, default=None,
+        metavar='learned|FLOAT')
     parser.add_argument('--bins', type=int, default=100)
     parser.add_argument('--save', default='logit_distribution.png')
     args = parser.parse_args(argv)
@@ -183,14 +191,16 @@ def load_lora_checkpoint(checkpoint_path, args, device, use_local_features,
     return model
 
 
-def collect_raw_logits(model, data_loader, device):
+def collect_raw_logits(model, data_loader, device, gate_override=None):
     real_logits = []
     fake_logits = []
 
     with torch.no_grad():
         for images, labels in data_loader:
             images = images.to(device, non_blocking=True)
-            logits = model(images, None, None, cla=True).flatten().cpu()
+            logits = model.forward_components(
+                images, gate_override=gate_override)['final_logits']
+            logits = logits.flatten().cpu()
             labels = labels.flatten()
             real_logits.extend(logits[labels == 0].tolist())
             fake_logits.extend(logits[labels == 1].tolist())
@@ -205,14 +215,18 @@ def release_device_memory(device):
         torch.cuda.empty_cache()
 
 
-def analyze_checkpoint(label, checkpoint, use_local_features, local_fusion, args,
-                       data_loader, device):
+def analyze_checkpoint(label, checkpoint, use_local_features, local_fusion,
+                       gate_override, args, data_loader, device):
     model = load_lora_checkpoint(
         checkpoint, args, device, use_local_features=use_local_features,
         local_fusion=local_fusion)
+    if (gate_override is not None
+            and model.local_fusion not in (
+                'residual_gate', 'adaptive_residual')):
+        raise ValueError('gate override requires a gated local checkpoint')
     try:
         real_logits, fake_logits = collect_raw_logits(
-            model, data_loader, device)
+            model, data_loader, device, gate_override=gate_override)
     finally:
         del model
         release_device_memory(device)
@@ -295,6 +309,7 @@ def main(argv=None):
         args.checkpoint,
         args.use_local_features,
         args.local_fusion,
+        args.gate_override,
         args,
         data_loader,
         device,
@@ -305,6 +320,7 @@ def main(argv=None):
             args.compare_checkpoint,
             args.compare_use_local_features,
             args.compare_local_fusion,
+            args.compare_gate_override,
             args,
             data_loader,
             device,

@@ -230,14 +230,23 @@ if __name__ == '__main__':
             #   loss  = loss1 + claloss * loss2
             if model.total_steps % opt.loss_freq == 0:
                 local_gate = model.get_local_gate_value()
+                losses = (
+                    f'loss={model.loss.item():.6f} '
+                    f'contrastive={model.loss1.item():.6f} '
+                    f'classification={model.loss2.item():.6f} '
+                    f'rank={model.loss_rank.item():.6f} '
+                    f'preserve={model.loss_preserve.item():.6f} '
+                    f'gate_reg={model.loss_gate.item():.6f}'
+                )
                 gate_message = (
                     '' if local_gate is None
-                    else ' local_gate: {:.6f}'.format(local_gate)
+                    else f' gate_mean={local_gate:.6f}'
                 )
-                print(time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()),
-                      "Train loss: {} loss1: {} loss2-cla: {} at step: {} lr {}{}".format(
-                          model.loss, model.loss1, model.loss2,
-                          model.total_steps, model.lr, gate_message))
+                print(
+                    time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()),
+                    f'{losses} step={model.total_steps} lr={model.lr}'
+                    f'{gate_message}',
+                )
 
             if should_evaluate(model.total_steps, opt.eval_freq):
                 print(f'==========total_steps {model.total_steps}=================')

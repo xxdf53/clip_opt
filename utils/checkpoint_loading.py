@@ -1,6 +1,9 @@
 from collections.abc import Mapping
 
 
+LOCAL_FUSIONS = ('concat', 'residual_gate', 'adaptive_residual')
+
+
 def extract_training_state_dict(payload):
     """Extract a train.py state_dict and remove leading DataParallel prefixes."""
     if not isinstance(payload, Mapping) or 'model' not in payload:
@@ -19,23 +22,32 @@ def extract_training_state_dict(payload):
 
 def resolve_local_fusion(state_dict, requested='auto', use_local_features=False):
     """Resolve local fusion from checkpoint keys and reject mismatches early."""
-    if requested not in ('auto', 'concat', 'residual_gate'):
+    valid = ('auto',) + LOCAL_FUSIONS
+    if requested not in valid:
         raise ValueError(
-            "local fusion must be 'auto', 'concat', or 'residual_gate', "
-            f'got {requested}')
+            f'local fusion must be one of {valid}, got {requested}')
     if not use_local_features:
-        return 'concat' if requested == 'auto' else requested
+        if requested not in ('auto', 'concat'):
+            raise ValueError(
+                f"--local_fusion '{requested}' requires --use_local_features")
+        return 'concat'
 
-    has_residual_gate = (
-        'local_gate_logit' in state_dict
-        or any(key.startswith('local_classifier.') for key in state_dict)
-    )
+    has_residual_gate = 'local_gate_logit' in state_dict
+    has_adaptive_gate = any(
+        key.startswith('local_gate_network.') for key in state_dict)
     has_concat_head = any(key.startswith('model.fc.0.') for key in state_dict)
 
-    if has_residual_gate and has_concat_head:
+    detected_heads = sum((
+        has_concat_head,
+        has_residual_gate,
+        has_adaptive_gate,
+    ))
+    if detected_heads > 1:
         raise ValueError(
-            'checkpoint contains both concat and residual-gate local heads')
-    if has_residual_gate:
+            'checkpoint contains multiple incompatible local fusion heads')
+    if has_adaptive_gate:
+        detected = 'adaptive_residual'
+    elif has_residual_gate:
         detected = 'residual_gate'
     elif has_concat_head:
         detected = 'concat'
@@ -49,3 +61,46 @@ def resolve_local_fusion(state_dict, requested='auto', use_local_features=False)
             f"checkpoint uses local_fusion='{detected}', but "
             f"--local_fusion '{requested}' was requested")
     return detected
+
+
+def parse_gate_override(value):
+    """Parse `learned` or a fixed gate in [0, 1] for evaluation."""
+    if value is None or str(value).lower() == 'learned':
+        return None
+    try:
+        gate = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("gate override must be 'learned' or a number") from error
+    if not 0.0 <= gate <= 1.0:
+        raise ValueError('gate override must be in [0, 1]')
+    return gate
+
+
+def select_baseline_initialization_state(source_state, target_state):
+    """Select shape-compatible non-local weights from a baseline checkpoint."""
+    local_prefixes = (
+        'local_norm.',
+        'local_projector.',
+        'local_classifier.',
+        'local_gate_logit',
+        'local_gate_network.',
+    )
+    if any(key.startswith(local_prefixes) for key in source_state):
+        raise ValueError('initialization checkpoint must be a non-local baseline')
+
+    compatible = {
+        key: value
+        for key, value in source_state.items()
+        if (key.startswith('model.fc.') or 'lora_' in key)
+        and key in target_state
+        and getattr(value, 'shape', None) == getattr(target_state[key], 'shape', None)
+    }
+    required = {'model.fc.weight', 'model.fc.bias'}
+    missing = sorted(required.difference(compatible))
+    if missing:
+        raise ValueError(
+            'baseline initialization is missing compatible global head keys: '
+            + ', '.join(missing))
+    if not any('lora_' in key for key in compatible):
+        raise ValueError('baseline initialization contains no compatible LoRA weights')
+    return compatible
