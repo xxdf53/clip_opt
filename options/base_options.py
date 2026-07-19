@@ -65,6 +65,12 @@ class BaseOptions():
         parser.add_argument('--local_pool', type=str, default='mean_std',
                             choices=['mean', 'mean_std'],
                             help='statistics used to aggregate patch tokens')
+        parser.add_argument('--local_fusion', type=str,
+                            default='residual_gate',
+                            choices=['concat', 'residual_gate'],
+                            help='local/global classifier fusion; concat is the legacy implementation')
+        parser.add_argument('--local_gate_init', type=float, default=0.01,
+                            help='initial residual-gate value in (0, 1)')
         parser.add_argument('--freeze_vision_lora', action='store_true',
                             help='freeze CLIP vision LoRA and train only newly added heads')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -114,8 +120,11 @@ class BaseOptions():
         opt.imgroot = opt.dataroot
         opt.name = '__'.join([opt.name, time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()), 'Seed_'+str(opt.seed), 'cates_'+'-'.join(opt.cates), 'claloss_'+str(opt.claloss), 'lora_r_'+str(opt.lora_r), 'lora_alpha_'+str(opt.lora_alpha), 'lora_dropout_'+str(opt.lora_dropout), 'lr_'+str(opt.lr)])
         if opt.use_local_features:
-            opt.name += '__local_layer_{}__pool_{}__dim_{}'.format(
-                opt.local_layer, opt.local_pool, opt.local_dim)
+            opt.name += '__local_layer_{}__pool_{}__dim_{}__fusion_{}'.format(
+                opt.local_layer, opt.local_pool, opt.local_dim,
+                opt.local_fusion)
+            if opt.local_fusion == 'residual_gate':
+                opt.name += '__gate_{}'.format(opt.local_gate_init)
             if opt.freeze_vision_lora:
                 opt.name += '__frozen_vision_lora'
 

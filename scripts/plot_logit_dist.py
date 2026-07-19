@@ -46,7 +46,10 @@ from torchvision import datasets, transforms
 
 from data.datasets import _TranslateDuplicate, pil_loader
 from networks.trainer import CLIPModel_lora
-from utils.checkpoint_loading import extract_training_state_dict
+from utils.checkpoint_loading import (
+    extract_training_state_dict,
+    resolve_local_fusion,
+)
 from utils.logit_distribution import build_shared_bin_edges, compute_logit_stats
 
 
@@ -66,6 +69,9 @@ def parse_args(argv=None):
     parser.add_argument('--compare_label', default='Local')
     parser.add_argument('--compare_use_local_features', action='store_true')
     parser.add_argument(
+        '--compare_local_fusion',
+        choices=['auto', 'concat', 'residual_gate'], default='auto')
+    parser.add_argument(
         '--clip_path', default=str(ROOT / 'clip-vit-large-patch14'),
         help='local CLIP ViT-L/14 model directory')
     parser.add_argument('--gpu', type=int, default=0)
@@ -80,6 +86,10 @@ def parse_args(argv=None):
     parser.add_argument('--local_dropout', type=float, default=0.1)
     parser.add_argument(
         '--local_pool', choices=['mean', 'mean_std'], default='mean_std')
+    parser.add_argument(
+        '--local_fusion', choices=['auto', 'concat', 'residual_gate'],
+        default='auto')
+    parser.add_argument('--local_gate_init', type=float, default=0.01)
     parser.add_argument('--bins', type=int, default=100)
     parser.add_argument('--save', default='logit_distribution.png')
     args = parser.parse_args(argv)
@@ -130,7 +140,8 @@ def build_image_loader(dataroot, batch_size, num_workers, device):
     )
 
 
-def load_lora_checkpoint(checkpoint_path, args, device, use_local_features):
+def load_lora_checkpoint(checkpoint_path, args, device, use_local_features,
+                         local_fusion='auto'):
     checkpoint_path = Path(checkpoint_path).expanduser().resolve()
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f'checkpoint not found: {checkpoint_path}')
@@ -141,6 +152,13 @@ def load_lora_checkpoint(checkpoint_path, args, device, use_local_features):
     state_dict, total_steps = extract_training_state_dict(payload)
     print(f'  Total training steps: '
           f'{total_steps if total_steps is not None else "unknown"}')
+    resolved_local_fusion = resolve_local_fusion(
+        state_dict,
+        requested=local_fusion,
+        use_local_features=use_local_features,
+    )
+    if use_local_features:
+        print(f'  Local fusion: {resolved_local_fusion}')
 
     model = CLIPModel_lora(
         name=args.clip_path,
@@ -153,10 +171,15 @@ def load_lora_checkpoint(checkpoint_path, args, device, use_local_features):
         local_dim=args.local_dim,
         local_dropout=args.local_dropout,
         local_pool=args.local_pool,
+        local_fusion=resolved_local_fusion,
+        local_gate_init=args.local_gate_init,
     )
     model.load_state_dict(state_dict, strict=True)
     model.to(device)
     model.eval()
+    gate = model.local_gate_value()
+    if gate is not None:
+        print(f'  Learned local gate: {gate.detach().item():.6f}')
     return model
 
 
@@ -182,10 +205,11 @@ def release_device_memory(device):
         torch.cuda.empty_cache()
 
 
-def analyze_checkpoint(label, checkpoint, use_local_features, args,
+def analyze_checkpoint(label, checkpoint, use_local_features, local_fusion, args,
                        data_loader, device):
     model = load_lora_checkpoint(
-        checkpoint, args, device, use_local_features=use_local_features)
+        checkpoint, args, device, use_local_features=use_local_features,
+        local_fusion=local_fusion)
     try:
         real_logits, fake_logits = collect_raw_logits(
             model, data_loader, device)
@@ -270,6 +294,7 @@ def main(argv=None):
         args.checkpoint_label,
         args.checkpoint,
         args.use_local_features,
+        args.local_fusion,
         args,
         data_loader,
         device,
@@ -279,6 +304,7 @@ def main(argv=None):
             args.compare_label,
             args.compare_checkpoint,
             args.compare_use_local_features,
+            args.compare_local_fusion,
             args,
             data_loader,
             device,

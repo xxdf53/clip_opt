@@ -26,6 +26,19 @@ class EvaluationCliTests(unittest.TestCase):
 
         self.assertEqual(args.num_workers, 0)
         self.assertEqual(args.predictions_csv, 'lora.csv')
+        self.assertEqual(args.local_fusion, 'auto')
+
+    def test_lora_cli_accepts_residual_gate_options(self):
+        args = test_checkpoint.parse_args([
+            '--dataroot', 'dataset',
+            '--checkpoint', 'model.pth',
+            '--use_local_features',
+            '--local_fusion', 'residual_gate',
+            '--local_gate_init', '0.02',
+        ])
+
+        self.assertEqual(args.local_fusion, 'residual_gate')
+        self.assertAlmostEqual(args.local_gate_init, 0.02)
 
     def test_forward_adapters_preserve_model_specific_signatures(self):
         images = torch.zeros(2, 3, 4, 4)

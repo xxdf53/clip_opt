@@ -50,6 +50,32 @@ conda activate c2pclip
 ./train_UniversalFakeDetect.sh
 ```
 
+New local-feature experiments use a gated residual classifier by default. The
+global branch keeps the baseline linear classifier, while the local branch is
+added as a small learnable residual whose initial gate is `0.01`:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+python scripts/train.py \
+  --dataroot ./ForenSynths_train_val_19test \
+  --textroot ./prefix_caption \
+  --classes car,cat,chair,horse \
+  --clip ./clip-vit-large-patch14 \
+  --gpu_ids 0,1 --batch_size 64 --keep_last_batch \
+  --total_steps 2251 --lr 0.0002 --claloss 8.0 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --delr 0.9 --delr_freq 10 \
+  --use_local_features \
+  --local_layer 12 --local_dim 256 \
+  --local_dropout 0.1 --local_pool mean_std \
+  --local_fusion residual_gate --local_gate_init 0.01 \
+  --name c2p_local_residual_gate
+```
+
+Use `--local_fusion concat` only to reproduce the legacy direct-concatenation
+local model. Training logs print the learned `local_gate` at each loss-report
+step.
+
 ### 2) Inference / Testing
 
 ```bash
@@ -102,8 +128,13 @@ python scripts/test_checkpoint.py \
   --use_local_features \
   --local_layer 12 --local_dim 256 \
   --local_dropout 0.1 --local_pool mean_std \
+  --local_fusion auto \
   --predictions_csv ./local_cnn_synth_predictions.csv
 ```
+
+`--local_fusion auto` detects both legacy `concat` checkpoints and new
+`residual_gate` checkpoints from their state-dict keys. An explicit mismatched
+fusion mode fails before strict state-dict loading with a focused error.
 
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
 raw-logit class statistics, macro means, and overall metrics. Prediction CSVs
@@ -133,6 +164,7 @@ python scripts/plot_logit_dist.py \
   --use_local_features \
   --local_layer 12 --local_dim 256 \
   --local_dropout 0.1 --local_pool mean_std \
+  --local_fusion auto \
   --save ./local_logit_distribution.png
 ```
 
@@ -150,6 +182,7 @@ python scripts/plot_logit_dist.py \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --local_layer 12 --local_dim 256 \
   --local_dropout 0.1 --local_pool mean_std \
+  --compare_local_fusion auto \
   --save ./baseline_vs_local_logits.png
 ```
 

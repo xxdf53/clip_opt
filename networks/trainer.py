@@ -13,6 +13,7 @@ class CLIPModel_lora(nn.Module):
                  lora_r=16, lora_alpha=32, lora_dropout=0.05,
                  use_local_features=False, local_layer=12, local_dim=256,
                  local_dropout=0.1, local_pool='mean_std',
+                 local_fusion='concat', local_gate_init=0.01,
                  freeze_vision_lora=False):
         super(CLIPModel_lora, self).__init__()
         self.model        = CLIPModel.from_pretrained(name)
@@ -38,6 +39,7 @@ class CLIPModel_lora(nn.Module):
         self.use_local_features = use_local_features
         self.local_layer = local_layer
         self.local_pool = local_pool
+        self.local_fusion = local_fusion
         vision_dim = self.model.config.vision_config.hidden_size
         projection_dim = self.model.config.projection_dim
 
@@ -49,6 +51,13 @@ class CLIPModel_lora(nn.Module):
             if self.local_pool not in ('mean', 'mean_std'):
                 raise ValueError(
                     f"local_pool must be 'mean' or 'mean_std', got {self.local_pool}")
+            if self.local_fusion not in ('concat', 'residual_gate'):
+                raise ValueError(
+                    "local_fusion must be 'concat' or 'residual_gate', "
+                    f'got {self.local_fusion}')
+            if not 0.0 < local_gate_init < 1.0:
+                raise ValueError(
+                    f'local_gate_init must be in (0, 1), got {local_gate_init}')
 
             pooled_dim = vision_dim if self.local_pool == 'mean' else 2 * vision_dim
             self.local_norm = nn.LayerNorm(vision_dim)
@@ -57,18 +66,34 @@ class CLIPModel_lora(nn.Module):
                 nn.GELU(),
                 nn.Dropout(local_dropout),
             )
-            self.model.fc = nn.Sequential(
-                nn.Linear(projection_dim + local_dim, 256),
-                nn.GELU(),
-                nn.Dropout(local_dropout),
-                nn.Linear(256, num_classes),
-            )
+            if self.local_fusion == 'concat':
+                # Legacy local-feature head. Keep this path unchanged so that
+                # checkpoints trained before residual gating remain loadable.
+                self.model.fc = nn.Sequential(
+                    nn.Linear(projection_dim + local_dim, 256),
+                    nn.GELU(),
+                    nn.Dropout(local_dropout),
+                    nn.Linear(256, num_classes),
+                )
+            else:
+                # Preserve the baseline global classifier and let the local
+                # branch learn only a bounded residual correction. A small
+                # initial gate avoids disrupting the global logit scale at the
+                # beginning of training.
+                self.model.fc = nn.Linear(projection_dim, num_classes)
+                self.local_classifier = nn.Linear(local_dim, num_classes)
+                gate_probability = torch.tensor(
+                    float(local_gate_init), dtype=torch.float32)
+                self.local_gate_logit = nn.Parameter(
+                    torch.logit(gate_probability))
         else:
             self.model.fc = nn.Linear(projection_dim, num_classes)
 
         self.model.fc.apply(self._init_linear)
         if self.use_local_features:
             self.local_projector.apply(self._init_linear)
+            if self.local_fusion == 'residual_gate':
+                self.local_classifier.apply(self._init_linear)
 
     @staticmethod
     def _init_linear(module):
@@ -123,8 +148,20 @@ class CLIPModel_lora(nn.Module):
             return image_features, self.model.fc(image_features)
 
         local_features = F.normalize(local_features, p=2, dim=-1)
-        fused_features = torch.cat((image_features, local_features), dim=-1)
-        return image_features, self.model.fc(fused_features)
+        if self.local_fusion == 'concat':
+            fused_features = torch.cat((image_features, local_features), dim=-1)
+            return image_features, self.model.fc(fused_features)
+
+        global_logits = self.model.fc(image_features)
+        local_logits = self.local_classifier(local_features)
+        gate = torch.sigmoid(self.local_gate_logit)
+        return image_features, global_logits + gate * local_logits
+
+    def local_gate_value(self):
+        """Return the current residual gate, or None for non-gated models."""
+        if not self.use_local_features or self.local_fusion != 'residual_gate':
+            return None
+        return torch.sigmoid(self.local_gate_logit)
     
     def forward(self, img, input_ids, attention_mask, cla=False):
         # tmp = x; print(f'x: {tmp.shape}, max: {tmp.max()}, min: {tmp.min()}, mean: {tmp.mean()}')
@@ -168,6 +205,8 @@ class Trainer(BaseModel):
             local_dim=opt.local_dim,
             local_dropout=opt.local_dropout,
             local_pool=opt.local_pool,
+            local_fusion=opt.local_fusion,
+            local_gate_init=opt.local_gate_init,
             freeze_vision_lora=opt.freeze_vision_lora,
         )
 
@@ -247,4 +286,12 @@ class Trainer(BaseModel):
         self.optimizer.zero_grad()
         self.loss.backward()
         self.optimizer.step()
+
+    def get_local_gate_value(self):
+        core_model = (
+            self.model.module if isinstance(self.model, nn.DataParallel)
+            else self.model
+        )
+        gate = core_model.local_gate_value()
+        return None if gate is None else gate.detach().item()
 

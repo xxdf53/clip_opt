@@ -46,7 +46,10 @@ from utils.binary_evaluation import (
     format_metrics,
     write_predictions_csv,
 )
-from utils.checkpoint_loading import extract_training_state_dict
+from utils.checkpoint_loading import (
+    extract_training_state_dict,
+    resolve_local_fusion,
+)
 
 
 def parse_args(argv=None):
@@ -76,6 +79,12 @@ def parse_args(argv=None):
     parser.add_argument('--local_dropout', type=float, default=0.1)
     parser.add_argument('--local_pool', choices=['mean', 'mean_std'],
                         default='mean_std')
+    parser.add_argument('--local_fusion',
+                        choices=['auto', 'concat', 'residual_gate'],
+                        default='auto',
+                        help='auto-detect legacy concat or residual-gate checkpoints')
+    parser.add_argument('--local_gate_init', type=float, default=0.01,
+                        help='constructor value; checkpoint restores the learned gate')
     args = parser.parse_args(argv)
     if args.batch_size <= 0:
         parser.error('--batch_size must be positive')
@@ -87,7 +96,8 @@ def parse_args(argv=None):
 def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
                     lora_dropout, device, use_local_features=False,
                     local_layer=12, local_dim=256, local_dropout=0.1,
-                    local_pool='mean_std'):
+                    local_pool='mean_std', local_fusion='auto',
+                    local_gate_init=0.01):
     """
     加载训练保存的 LoRA checkpoint。
 
@@ -106,6 +116,13 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
     new_state_dict, total_steps = extract_training_state_dict(raw)
     print('  Total training steps: '
           f'{total_steps if total_steps is not None else "unknown"}')
+    resolved_local_fusion = resolve_local_fusion(
+        new_state_dict,
+        requested=local_fusion,
+        use_local_features=use_local_features,
+    )
+    if use_local_features:
+        print(f'  Local fusion: {resolved_local_fusion}')
 
     # 创建与训练时相同结构的模型
     model = CLIPModel_lora(
@@ -119,10 +136,16 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
         local_dim=local_dim,
         local_dropout=local_dropout,
         local_pool=local_pool,
+        local_fusion=resolved_local_fusion,
+        local_gate_init=local_gate_init,
     )
     model.load_state_dict(new_state_dict, strict=True)
     model.to(device)
     model.eval()
+
+    gate = model.local_gate_value()
+    if gate is not None:
+        print(f'  Learned local gate: {gate.detach().item():.6f}')
 
     print(f'  Model loaded successfully.')
     return model
@@ -171,6 +194,8 @@ def main(argv=None):
         local_dim=args.local_dim,
         local_dropout=args.local_dropout,
         local_pool=args.local_pool,
+        local_fusion=args.local_fusion,
+        local_gate_init=args.local_gate_init,
     )
 
     print(f'Dataset: {dataroot}')
