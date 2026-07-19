@@ -82,6 +82,8 @@ The initialization checkpoint must be a non-local model with matching CLIP and
 LoRA dimensions. `concat` and scalar `residual_gate` modes remain available
 only for loading and reproducing earlier experiments. Training logs report all
 auxiliary losses and the mean adaptive gate for the current global batch.
+Experiment directories use a compact name capped at 180 UTF-8 bytes; the full
+configuration remains available in each directory's `opt.txt`.
 
 ### 2) Inference / Testing
 

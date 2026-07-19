@@ -5,7 +5,49 @@ import utils.util as util
 import torch
 #import models
 #import data
- 
+
+
+MAX_EXPERIMENT_NAME_BYTES = 180
+
+
+def _truncate_utf8(text, max_bytes=MAX_EXPERIMENT_NAME_BYTES):
+    encoded = text.encode('utf-8')
+    if len(encoded) <= max_bytes:
+        return text
+    shortened = encoded[:max_bytes].decode('utf-8', errors='ignore')
+    return shortened.rstrip(' ._-') or 'experiment'
+
+
+def build_experiment_name(opt, timestamp=None):
+    """Build a compact, Linux-safe directory name; opt.txt keeps full config."""
+    timestamp = timestamp or time.strftime('%Y%m%d-%H%M%S', time.localtime())
+    base_name = ''.join(
+        character if character.isalnum() or character in '-_.' else '_'
+        for character in opt.name.strip()
+    ) or 'experiment'
+    parts = [
+        base_name,
+        timestamp,
+        f's{opt.seed}',
+        f'r{opt.lora_r}a{opt.lora_alpha}d{opt.lora_dropout}',
+        f'lr{opt.lr}',
+        f'c{opt.claloss}',
+    ]
+    if opt.use_local_features:
+        fusion_names = {
+            'concat': 'cat',
+            'residual_gate': 'sg',
+            'adaptive_residual': 'ar',
+        }
+        pool_name = 'ms' if opt.local_pool == 'mean_std' else 'm'
+        parts.append(
+            f'L{opt.local_layer}-{pool_name}-d{opt.local_dim}-'
+            f'{fusion_names[opt.local_fusion]}')
+        if opt.freeze_global_branch:
+            parts.append('fg')
+        elif opt.freeze_vision_lora:
+            parts.append('fv')
+    return _truncate_utf8('__'.join(parts))
 
 class BaseOptions():
     def __init__(self):
@@ -128,27 +170,11 @@ class BaseOptions():
         opt = self.gather_options()
         opt.isTrain = self.isTrain   # train or test
         opt.imgroot = opt.dataroot
-        opt.name = '__'.join([opt.name, time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()), 'Seed_'+str(opt.seed), 'cates_'+'-'.join(opt.cates), 'claloss_'+str(opt.claloss), 'lora_r_'+str(opt.lora_r), 'lora_alpha_'+str(opt.lora_alpha), 'lora_dropout_'+str(opt.lora_dropout), 'lr_'+str(opt.lr)])
-        if opt.use_local_features:
-            opt.name += '__local_layer_{}__pool_{}__dim_{}__fusion_{}'.format(
-                opt.local_layer, opt.local_pool, opt.local_dim,
-                opt.local_fusion)
-            if opt.local_fusion in ('residual_gate', 'adaptive_residual'):
-                opt.name += '__gate_{}'.format(opt.local_gate_init)
-            if opt.local_fusion == 'adaptive_residual':
-                opt.name += '__rank_{}__preserve_{}__gate_reg_{}'.format(
-                    opt.rank_loss_weight,
-                    opt.preserve_loss_weight,
-                    opt.gate_loss_weight,
-                )
-            if opt.freeze_global_branch:
-                opt.name += '__frozen_global'
-            if opt.freeze_vision_lora:
-                opt.name += '__frozen_vision_lora'
+        opt.name = build_experiment_name(opt)
 
         if opt.suffix:
             suffix = ('_' + opt.suffix.format(**vars(opt))) if opt.suffix != '' else ''
-            opt.name = opt.name + suffix
+            opt.name = _truncate_utf8(opt.name + suffix)
 
         if print_options:
             self.print_options(opt)
