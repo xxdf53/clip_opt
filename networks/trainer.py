@@ -10,6 +10,8 @@ from utils.local_objectives import (
     confidence_preservation_loss,
     gate_sparsity_loss,
     pairwise_ranking_loss,
+    relative_gate_supervision_loss,
+    residual_candidate_loss,
 )
 
 from transformers import CLIPModel
@@ -265,6 +267,9 @@ class Trainer(BaseModel):
         self.rank_loss_weight = opt.rank_loss_weight
         self.preserve_loss_weight = opt.preserve_loss_weight
         self.gate_loss_weight = opt.gate_loss_weight
+        self.local_candidate_loss_weight = opt.local_candidate_loss_weight
+        self.gate_supervision_weight = opt.gate_supervision_weight
+        self.gate_target_margin = opt.gate_target_margin
         self.freeze_global_branch = opt.freeze_global_branch
         
         self.model = CLIPModel_lora(
@@ -307,14 +312,20 @@ class Trainer(BaseModel):
         auxiliary_weights = (
             self.preserve_loss_weight,
             self.gate_loss_weight,
+            self.local_candidate_loss_weight,
+            self.gate_supervision_weight,
         )
         if any(weight < 0 for weight in (
                 self.rank_loss_weight,) + auxiliary_weights):
             raise ValueError('auxiliary loss weights cannot be negative')
-        if (any(auxiliary_weights)
-                and opt.local_fusion != 'adaptive_residual'):
+        if (any(auxiliary_weights) and (
+                not opt.use_local_features
+                or opt.local_fusion != 'adaptive_residual')):
             raise ValueError(
-                'preserve/gate losses require --local_fusion adaptive_residual')
+                'local auxiliary losses require --use_local_features and '
+                '--local_fusion adaptive_residual')
+        if self.gate_target_margin <= 0:
+            raise ValueError('--gate_target_margin must be positive')
 
         net_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(
@@ -409,6 +420,13 @@ class Trainer(BaseModel):
             self.classhead, self.label)
         zero = self.classhead.new_zeros(())
         if 'gate' in self.components:
+            self.loss_local_candidate = (
+                self.local_candidate_loss_weight * residual_candidate_loss(
+                    self.components['global_logits'],
+                    self.components['local_logits'],
+                    self.label,
+                )
+            )
             self.loss_preserve = (
                 self.preserve_loss_weight * confidence_preservation_loss(
                     self.components['final_logits'],
@@ -417,12 +435,26 @@ class Trainer(BaseModel):
             )
             self.loss_gate = self.gate_loss_weight * gate_sparsity_loss(
                 self.components['gate'])
+            gate_supervision, gate_targets = relative_gate_supervision_loss(
+                self.components['gate'],
+                self.components['global_logits'],
+                self.components['local_logits'],
+                self.label,
+                margin=self.gate_target_margin,
+            )
+            self.loss_gate_supervision = (
+                self.gate_supervision_weight * gate_supervision)
+            self.gate_target_mean = gate_targets.detach().mean()
         else:
+            self.loss_local_candidate = zero
             self.loss_preserve = zero
             self.loss_gate = zero
+            self.loss_gate_supervision = zero
+            self.gate_target_mean = None
         self.loss = (
             self.loss1 + self.loss2 + self.loss_rank
-            + self.loss_preserve + self.loss_gate
+            + self.loss_local_candidate + self.loss_preserve
+            + self.loss_gate + self.loss_gate_supervision
         )
         self.optimizer.zero_grad()
         self.loss.backward()

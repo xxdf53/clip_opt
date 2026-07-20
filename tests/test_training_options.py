@@ -15,6 +15,9 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.local_fusion, 'adaptive_residual')
         self.assertEqual(args.local_gate_init, 0.01)
         self.assertEqual(args.rank_loss_weight, 0.0)
+        self.assertEqual(args.local_candidate_loss_weight, 0.0)
+        self.assertEqual(args.gate_supervision_weight, 0.0)
+        self.assertEqual(args.gate_target_margin, 0.1)
 
     def test_accepts_protected_global_and_auxiliary_losses(self):
         args = self.parse([
@@ -23,6 +26,9 @@ class TrainingOptionTests(unittest.TestCase):
             '--rank_loss_weight', '1.0',
             '--preserve_loss_weight', '0.1',
             '--gate_loss_weight', '0.01',
+            '--local_candidate_loss_weight', '1.0',
+            '--gate_supervision_weight', '1.0',
+            '--gate_target_margin', '0.2',
         ])
 
         self.assertEqual(args.init_baseline_checkpoint, 'baseline.pth')
@@ -30,6 +36,9 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.rank_loss_weight, 1.0)
         self.assertEqual(args.preserve_loss_weight, 0.1)
         self.assertEqual(args.gate_loss_weight, 0.01)
+        self.assertEqual(args.local_candidate_loss_weight, 1.0)
+        self.assertEqual(args.gate_supervision_weight, 1.0)
+        self.assertEqual(args.gate_target_margin, 0.2)
 
     def test_compact_name_keeps_only_identifying_architecture_fields(self):
         args = self.parse([

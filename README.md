@@ -75,13 +75,20 @@ python scripts/train.py \
   --rank_loss_weight 1.0 \
   --preserve_loss_weight 0.1 \
   --gate_loss_weight 0.01 \
-  --name c2p_local_adaptive_residual
+  --local_candidate_loss_weight 1.0 \
+  --gate_supervision_weight 1.0 \
+  --gate_target_margin 0.1 \
+  --name c2p_local_relative_gate
 ```
 
 The initialization checkpoint must be a non-local model with matching CLIP and
 LoRA dimensions. `concat` and scalar `residual_gate` modes remain available
 only for loading and reproducing earlier experiments. Training logs report all
-auxiliary losses and the mean adaptive gate for the current global batch.
+auxiliary losses, the mean adaptive gate, and its relative-reliability target.
+The local candidate loss trains a full correction before gate attenuation; the
+gate target is nonzero only when that correction reduces per-image BCE versus
+the protected baseline. This suppresses local intervention on confident global
+predictions while retaining a strong signal on baseline mistakes.
 Experiment directories use a compact name capped at 180 UTF-8 bytes; the full
 configuration remains available in each directory's `opt.txt`.
 

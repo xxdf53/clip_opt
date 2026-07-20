@@ -123,6 +123,14 @@ class BaseOptions():
                             help='weight of confidence-aware residual preservation loss')
         parser.add_argument('--gate_loss_weight', type=float, default=0.0,
                             help='weight of gate sparsity regularization')
+        parser.add_argument('--local_candidate_loss_weight', type=float,
+                            default=0.0,
+                            help='weight of the ungated local-residual candidate BCE loss')
+        parser.add_argument('--gate_supervision_weight', type=float,
+                            default=0.0,
+                            help='weight of relative-reliability gate supervision')
+        parser.add_argument('--gate_target_margin', type=float, default=0.1,
+                            help='BCE improvement needed for a fully open supervised gate target')
         parser.add_argument('--freeze_vision_lora', action='store_true',
                             help='freeze CLIP vision LoRA and train only newly added heads')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
