@@ -22,6 +22,7 @@ PREDICTION_FIELDS = (
 OUTPUT_COMPONENT_FIELDS = {
     'global_logits': 'global_logit',
     'local_logits': 'local_logit',
+    'residual_logits': 'residual_logit',
     'gate': 'gate',
     'learned_gate': 'learned_gate',
 }

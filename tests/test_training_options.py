@@ -18,6 +18,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.local_candidate_loss_weight, 0.0)
         self.assertEqual(args.gate_supervision_weight, 0.0)
         self.assertEqual(args.gate_target_margin, 0.1)
+        self.assertEqual(args.residual_alpha, 1.0)
+        self.assertEqual(args.residual_scale, 4.0)
 
     def test_accepts_protected_global_and_auxiliary_losses(self):
         args = self.parse([
@@ -64,6 +66,20 @@ class TrainingOptionTests(unittest.TestCase):
             'c2p_local_adaptive_residual__20260719-203208__s123__'
             'r6a6d0.8__lr0.0002__c8.0__L12-ms-d256-ar__fg',
         )
+
+    def test_compact_name_identifies_bounded_residual(self):
+        args = self.parse([
+            '--name', 'c2p_local_bounded_residual',
+            '--use_local_features',
+            '--local_fusion', 'bounded_residual',
+            '--residual_alpha', '1.0',
+            '--residual_scale', '4.0',
+            '--freeze_global_branch',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260721-120000')
+
+        self.assertIn('__L12-ms-d256-br-a1.0-s4.0__fg', name)
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse([

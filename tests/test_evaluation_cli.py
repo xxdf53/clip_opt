@@ -52,6 +52,19 @@ class EvaluationCliTests(unittest.TestCase):
         self.assertEqual(args.local_fusion, 'adaptive_residual')
         self.assertEqual(args.gate_override, 0.0)
 
+    def test_lora_cli_accepts_bounded_residual_options(self):
+        args = test_checkpoint.parse_args([
+            '--dataroot', 'dataset',
+            '--use_local_features',
+            '--local_fusion', 'bounded_residual',
+            '--residual_alpha', '1.0',
+            '--residual_scale', '4.0',
+        ])
+
+        self.assertEqual(args.local_fusion, 'bounded_residual')
+        self.assertEqual(args.residual_alpha, 1.0)
+        self.assertEqual(args.residual_scale, 4.0)
+
     def test_forward_adapters_preserve_model_specific_signatures(self):
         images = torch.zeros(2, 3, 4, 4)
 

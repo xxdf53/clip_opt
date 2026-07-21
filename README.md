@@ -92,6 +92,32 @@ predictions while retaining a strong signal on baseline mistakes.
 Experiment directories use a compact name capped at 180 UTF-8 bytes; the full
 configuration remains available in each directory's `opt.txt`.
 
+For a formally aligned full-residual model, use `bounded_residual`. It removes
+the sample gate and applies the same bounded correction during training and
+inference. `residual_alpha` is the residual multiplier and `residual_scale`
+sets the `tanh` bound:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+python scripts/train.py \
+  --dataroot ./ForenSynths_train_val_19test \
+  --textroot ./prefix_caption \
+  --classes car,cat,chair,horse \
+  --clip ./clip-vit-large-patch14 \
+  --checkpoints_dir ./c2p_checkpoints \
+  --name c2p_local_bounded_residual \
+  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
+  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --delr 0.9 --delr_freq 10 \
+  --init_baseline_checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --freeze_global_branch --use_local_features \
+  --local_layer 12 --local_dim 256 --local_dropout 0.1 \
+  --local_pool mean_std --local_fusion bounded_residual \
+  --residual_alpha 1.0 --residual_scale 4.0 \
+  --rank_loss_weight 1.0
+```
+
 ### 2) Inference / Testing
 
 ```bash
@@ -148,15 +174,35 @@ python scripts/test_checkpoint.py \
   --predictions_csv ./local_cnn_synth_predictions.csv
 ```
 
-`--local_fusion auto` detects legacy `concat`, scalar `residual_gate`, and new
-`adaptive_residual` checkpoints from their state-dict keys. An explicit
+Test a formally aligned bounded-residual checkpoint. The alpha and scale are
+restored from checkpoint buffers, so `--gate_override` is not used:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
+python scripts/test_checkpoint.py \
+  --dataroot ./CNN_synth_testset \
+  --checkpoint ./c2p_checkpoints/bounded/model.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --batch_size 64 --gpu 0 --num_workers 4 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --use_local_features \
+  --local_layer 12 --local_dim 256 \
+  --local_dropout 0.1 --local_pool mean_std \
+  --local_fusion auto \
+  --predictions_csv ./bounded_residual_cnn_synth_predictions.csv
+```
+
+`--local_fusion auto` detects legacy `concat`, scalar `residual_gate`,
+`adaptive_residual`, and `bounded_residual` checkpoints from their state-dict
+keys. An explicit
 mismatched fusion mode fails before strict state-dict loading.
 
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
-raw-logit class statistics, macro means, and overall metrics. Gated local-model
-CSVs additionally contain `global_logit`, `local_logit`, and `gate`; forced-gate
-runs also retain `learned_gate`. To diagnose one checkpoint without retraining,
-repeat the test with `--gate_override 0`, `0.01`, or `learned`.
+raw-logit class statistics, macro means, and overall metrics. Local-model CSVs
+contain `global_logit` and `local_logit`; bounded residual CSVs also contain
+`residual_logit`. Gated checkpoints additionally contain `gate`, and forced
+gate runs retain `learned_gate`. `gate_override` is not valid for bounded
+residual checkpoints.
 
 ### Logit distribution analysis for self-trained LoRA checkpoints
 

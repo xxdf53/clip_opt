@@ -25,6 +25,7 @@ class CLIPModel_lora(nn.Module):
                  use_local_features=False, local_layer=12, local_dim=256,
                  local_dropout=0.1, local_pool='mean_std',
                  local_fusion='concat', local_gate_init=0.01,
+                 residual_alpha=1.0, residual_scale=4.0,
                  freeze_vision_lora=False):
         super(CLIPModel_lora, self).__init__()
         self.model        = CLIPModel.from_pretrained(name)
@@ -61,11 +62,12 @@ class CLIPModel_lora(nn.Module):
                 raise ValueError(
                     f"local_pool must be 'mean' or 'mean_std', got {self.local_pool}")
             if self.local_fusion not in (
-                    'concat', 'residual_gate', 'adaptive_residual'):
+                    'concat', 'residual_gate', 'adaptive_residual',
+                    'bounded_residual'):
                 raise ValueError(
                     'unsupported local_fusion: '
                     f'got {self.local_fusion}')
-            if (self.local_fusion != 'concat'
+            if (self.local_fusion in ('residual_gate', 'adaptive_residual')
                     and not 0.0 < local_gate_init < 1.0):
                 raise ValueError(
                     f'local_gate_init must be in (0, 1), got {local_gate_init}')
@@ -95,19 +97,37 @@ class CLIPModel_lora(nn.Module):
                 if self.local_fusion == 'residual_gate':
                     # Compatibility path for the first scalar-gate experiment.
                     self.local_gate_logit = nn.Parameter(gate_bias)
-                else:
+                elif self.local_fusion == 'adaptive_residual':
                     gate_input_dim = projection_dim + local_dim + 2
                     self.local_gate_network = nn.Linear(gate_input_dim, 1)
                     nn.init.zeros_(self.local_gate_network.weight)
                     nn.init.constant_(
                         self.local_gate_network.bias, gate_bias.item())
+                else:
+                    if residual_alpha < 0:
+                        raise ValueError(
+                            'residual_alpha must be non-negative, got '
+                            f'{residual_alpha}')
+                    if residual_scale <= 0:
+                        raise ValueError(
+                            'residual_scale must be positive, got '
+                            f'{residual_scale}')
+                    self.register_buffer(
+                        'residual_alpha',
+                        torch.tensor(float(residual_alpha), dtype=torch.float32),
+                    )
+                    self.register_buffer(
+                        'residual_scale',
+                        torch.tensor(float(residual_scale), dtype=torch.float32),
+                    )
         else:
             self.model.fc = nn.Linear(projection_dim, num_classes)
 
         self.model.fc.apply(self._init_linear)
         if self.use_local_features:
             self.local_projector.apply(self._init_linear)
-            if self.local_fusion in ('residual_gate', 'adaptive_residual'):
+            if self.local_fusion in (
+                    'residual_gate', 'adaptive_residual', 'bounded_residual'):
                 self.local_classifier.apply(self._init_linear)
 
     @staticmethod
@@ -176,6 +196,21 @@ class CLIPModel_lora(nn.Module):
 
         global_logits = self.model.fc(image_features)
         local_logits = self.local_classifier(local_features)
+        if self.local_fusion == 'bounded_residual':
+            if gate_override is not None:
+                raise ValueError(
+                    'gate_override is not supported by bounded_residual')
+            residual_logits = self.residual_scale * torch.tanh(
+                local_logits / self.residual_scale)
+            final_logits = (
+                global_logits + self.residual_alpha * residual_logits)
+            return image_features, {
+                'final_logits': final_logits,
+                'global_logits': global_logits,
+                'local_logits': local_logits,
+                'residual_logits': residual_logits,
+            }
+
         if self.local_fusion == 'residual_gate':
             learned_gate = torch.sigmoid(self.local_gate_logit).expand_as(
                 global_logits)
@@ -284,6 +319,8 @@ class Trainer(BaseModel):
             local_pool=opt.local_pool,
             local_fusion=opt.local_fusion,
             local_gate_init=opt.local_gate_init,
+            residual_alpha=opt.residual_alpha,
+            residual_scale=opt.residual_scale,
             freeze_vision_lora=opt.freeze_vision_lora,
         )
 

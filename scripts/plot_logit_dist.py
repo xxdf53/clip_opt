@@ -95,6 +95,8 @@ def parse_args(argv=None):
         '--local_fusion', choices=['auto'] + list(LOCAL_FUSIONS),
         default='auto')
     parser.add_argument('--local_gate_init', type=float, default=0.01)
+    parser.add_argument('--residual_alpha', type=float, default=1.0)
+    parser.add_argument('--residual_scale', type=float, default=4.0)
     parser.add_argument(
         '--gate_override', type=parse_gate_override, default=None,
         metavar='learned|FLOAT')
@@ -181,6 +183,8 @@ def load_lora_checkpoint(checkpoint_path, args, device, use_local_features,
         local_pool=args.local_pool,
         local_fusion=resolved_local_fusion,
         local_gate_init=args.local_gate_init,
+        residual_alpha=args.residual_alpha,
+        residual_scale=args.residual_scale,
     )
     model.load_state_dict(state_dict, strict=True)
     model.to(device)
@@ -188,6 +192,11 @@ def load_lora_checkpoint(checkpoint_path, args, device, use_local_features,
     gate = model.local_gate_value()
     if gate is not None:
         print(f'  Learned local gate: {gate.detach().item():.6f}')
+    if model.local_fusion == 'bounded_residual':
+        print(
+            '  Bounded residual: '
+            f'alpha={model.residual_alpha.item():.6f}, '
+            f'scale={model.residual_scale.item():.6f}')
     return model
 
 

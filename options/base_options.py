@@ -38,11 +38,16 @@ def build_experiment_name(opt, timestamp=None):
             'concat': 'cat',
             'residual_gate': 'sg',
             'adaptive_residual': 'ar',
+            'bounded_residual': 'br',
         }
         pool_name = 'ms' if opt.local_pool == 'mean_std' else 'm'
-        parts.append(
+        local_name = (
             f'L{opt.local_layer}-{pool_name}-d{opt.local_dim}-'
             f'{fusion_names[opt.local_fusion]}')
+        if opt.local_fusion == 'bounded_residual':
+            local_name += (
+                f'-a{opt.residual_alpha}-s{opt.residual_scale}')
+        parts.append(local_name)
         if opt.freeze_global_branch:
             parts.append('fg')
         elif opt.freeze_vision_lora:
@@ -109,7 +114,8 @@ class BaseOptions():
                             help='statistics used to aggregate patch tokens')
         parser.add_argument('--local_fusion', type=str,
                             default='adaptive_residual',
-                            choices=['concat', 'residual_gate', 'adaptive_residual'],
+                            choices=['concat', 'residual_gate',
+                                     'adaptive_residual', 'bounded_residual'],
                             help='local/global classifier fusion; the first two modes are retained for old checkpoints')
         parser.add_argument('--local_gate_init', type=float, default=0.01,
                             help='initial residual-gate value in (0, 1)')
@@ -131,6 +137,10 @@ class BaseOptions():
                             help='weight of relative-reliability gate supervision')
         parser.add_argument('--gate_target_margin', type=float, default=0.1,
                             help='BCE improvement needed for a fully open supervised gate target')
+        parser.add_argument('--residual_alpha', type=float, default=1.0,
+                            help='fixed multiplier for bounded local residuals')
+        parser.add_argument('--residual_scale', type=float, default=4.0,
+                            help='positive tanh scale and magnitude bound for local residuals')
         parser.add_argument('--freeze_vision_lora', action='store_true',
                             help='freeze CLIP vision LoRA and train only newly added heads')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')

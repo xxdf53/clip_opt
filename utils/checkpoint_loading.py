@@ -1,7 +1,8 @@
 from collections.abc import Mapping
 
 
-LOCAL_FUSIONS = ('concat', 'residual_gate', 'adaptive_residual')
+LOCAL_FUSIONS = (
+    'concat', 'residual_gate', 'adaptive_residual', 'bounded_residual')
 
 
 def extract_training_state_dict(payload):
@@ -35,17 +36,27 @@ def resolve_local_fusion(state_dict, requested='auto', use_local_features=False)
     has_residual_gate = 'local_gate_logit' in state_dict
     has_adaptive_gate = any(
         key.startswith('local_gate_network.') for key in state_dict)
+    has_bounded_alpha = 'residual_alpha' in state_dict
+    has_bounded_scale = 'residual_scale' in state_dict
+    if has_bounded_alpha != has_bounded_scale:
+        raise ValueError(
+            'bounded residual checkpoint must contain residual_alpha and '
+            'residual_scale')
+    has_bounded_residual = has_bounded_alpha and has_bounded_scale
     has_concat_head = any(key.startswith('model.fc.0.') for key in state_dict)
 
     detected_heads = sum((
         has_concat_head,
         has_residual_gate,
         has_adaptive_gate,
+        has_bounded_residual,
     ))
     if detected_heads > 1:
         raise ValueError(
             'checkpoint contains multiple incompatible local fusion heads')
-    if has_adaptive_gate:
+    if has_bounded_residual:
+        detected = 'bounded_residual'
+    elif has_adaptive_gate:
         detected = 'adaptive_residual'
     elif has_residual_gate:
         detected = 'residual_gate'
@@ -84,6 +95,8 @@ def select_baseline_initialization_state(source_state, target_state):
         'local_classifier.',
         'local_gate_logit',
         'local_gate_network.',
+        'residual_alpha',
+        'residual_scale',
     )
     if any(key.startswith(local_prefixes) for key in source_state):
         raise ValueError('initialization checkpoint must be a non-local baseline')

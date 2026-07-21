@@ -87,6 +87,10 @@ def parse_args(argv=None):
                         help='auto-detect the local fusion from checkpoint keys')
     parser.add_argument('--local_gate_init', type=float, default=0.01,
                         help='constructor value; checkpoint restores the learned gate')
+    parser.add_argument('--residual_alpha', type=float, default=1.0,
+                        help='constructor value; bounded checkpoint restores it')
+    parser.add_argument('--residual_scale', type=float, default=4.0,
+                        help='constructor value; bounded checkpoint restores it')
     parser.add_argument(
         '--gate_override', type=parse_gate_override, default=None,
         metavar='learned|FLOAT',
@@ -103,7 +107,8 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
                     lora_dropout, device, use_local_features=False,
                     local_layer=12, local_dim=256, local_dropout=0.1,
                     local_pool='mean_std', local_fusion='auto',
-                    local_gate_init=0.01):
+                    local_gate_init=0.01, residual_alpha=1.0,
+                    residual_scale=4.0):
     """
     加载训练保存的 LoRA checkpoint。
 
@@ -144,6 +149,8 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
         local_pool=local_pool,
         local_fusion=resolved_local_fusion,
         local_gate_init=local_gate_init,
+        residual_alpha=residual_alpha,
+        residual_scale=residual_scale,
     )
     model.load_state_dict(new_state_dict, strict=True)
     model.to(device)
@@ -152,6 +159,11 @@ def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
     gate = model.local_gate_value()
     if gate is not None:
         print(f'  Learned local gate: {gate.detach().item():.6f}')
+    if model.local_fusion == 'bounded_residual':
+        print(
+            '  Bounded residual: '
+            f'alpha={model.residual_alpha.item():.6f}, '
+            f'scale={model.residual_scale.item():.6f}')
 
     print(f'  Model loaded successfully.')
     return model
@@ -202,6 +214,8 @@ def main(argv=None):
         local_pool=args.local_pool,
         local_fusion=args.local_fusion,
         local_gate_init=args.local_gate_init,
+        residual_alpha=args.residual_alpha,
+        residual_scale=args.residual_scale,
     )
     if (args.gate_override is not None
             and model.local_fusion not in (

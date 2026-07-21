@@ -69,6 +69,15 @@ class TrainingCheckpointTests(unittest.TestCase):
 
         self.assertEqual(fusion, 'adaptive_residual')
 
+    def test_detects_bounded_residual_buffers(self):
+        fusion = resolve_local_fusion(
+            {'model.fc.weight': 1, 'local_classifier.weight': 2,
+             'residual_alpha': 3, 'residual_scale': 4},
+            use_local_features=True,
+        )
+
+        self.assertEqual(fusion, 'bounded_residual')
+
     def test_rejects_explicit_fusion_mismatch(self):
         with self.assertRaisesRegex(ValueError, "checkpoint uses local_fusion='concat'"):
             resolve_local_fusion(

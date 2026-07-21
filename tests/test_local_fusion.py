@@ -124,5 +124,61 @@ class AdaptiveResidualGateTests(unittest.TestCase):
             for parameter in model.local_gate_network.parameters()))
 
 
+class BoundedResidualTests(unittest.TestCase):
+    def build_minimal_model(self, alpha=1.0, scale=4.0):
+        model = CLIPModel_lora.__new__(CLIPModel_lora)
+        nn.Module.__init__(model)
+        model.use_local_features = True
+        model.local_fusion = 'bounded_residual'
+        model.model = nn.Module()
+        model.model.fc = nn.Linear(2, 1, bias=False)
+        model.local_classifier = nn.Linear(2, 1, bias=False)
+        model.register_buffer('residual_alpha', torch.tensor(alpha))
+        model.register_buffer('residual_scale', torch.tensor(scale))
+        with torch.no_grad():
+            model.model.fc.weight.copy_(torch.tensor([[1.0, 0.0]]))
+            model.local_classifier.weight.copy_(torch.tensor([[0.0, 10.0]]))
+        return model
+
+    def test_bounded_residual_uses_checkpointed_alpha_and_scale(self):
+        model = self.build_minimal_model(alpha=0.5, scale=4.0)
+
+        _, outputs = model.classification_outputs(
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor([[0.0, 1.0]]),
+        )
+
+        expected_residual = 4.0 * torch.tanh(torch.tensor(10.0 / 4.0))
+        expected_final = 1.0 + 0.5 * expected_residual
+        self.assertTrue(torch.allclose(
+            outputs['residual_logits'], expected_residual.reshape(1, 1)))
+        self.assertTrue(torch.allclose(
+            outputs['final_logits'], expected_final.reshape(1, 1)))
+        self.assertLess(outputs['residual_logits'].item(), 4.0)
+
+    def test_bounded_residual_trains_local_branch(self):
+        model = self.build_minimal_model()
+
+        _, outputs = model.classification_outputs(
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor([[0.0, 1.0]]),
+        )
+        outputs['final_logits'].sum().backward()
+
+        self.assertIsNotNone(model.local_classifier.weight.grad)
+        self.assertGreater(
+            model.local_classifier.weight.grad.abs().sum().item(), 0.0)
+
+    def test_bounded_residual_rejects_gate_override(self):
+        model = self.build_minimal_model()
+
+        with self.assertRaisesRegex(ValueError, 'gate_override'):
+            model.classification_outputs(
+                torch.tensor([[1.0, 0.0]]),
+                torch.tensor([[0.0, 1.0]]),
+                gate_override=1.0,
+            )
+
+
 if __name__ == '__main__':
     unittest.main()
