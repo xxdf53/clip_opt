@@ -9,10 +9,47 @@ from utils.local_objectives import (
     relative_gate_supervision_loss,
     relative_gate_target,
     residual_candidate_loss,
+    zero_threshold_margin_loss,
 )
 
 
 class LocalObjectiveTests(unittest.TestCase):
+    def test_zero_threshold_margin_is_zero_past_both_margins(self):
+        loss = zero_threshold_margin_loss(
+            torch.tensor([-1.5, 1.5]),
+            torch.tensor([0.0, 1.0]),
+            margin=1.0,
+        )
+
+        self.assertEqual(loss.item(), 0.0)
+
+    def test_zero_threshold_margin_penalizes_wrong_side_logits(self):
+        labels = torch.tensor([0.0, 1.0])
+
+        correct = zero_threshold_margin_loss(
+            torch.tensor([-0.5, 0.5]), labels, margin=1.0)
+        wrong = zero_threshold_margin_loss(
+            torch.tensor([0.5, -0.5]), labels, margin=1.0)
+
+        self.assertLess(correct.item(), wrong.item())
+
+    def test_zero_threshold_margin_provides_logit_gradients(self):
+        logits = torch.tensor([0.5, -0.5], requires_grad=True)
+        loss = zero_threshold_margin_loss(
+            logits, torch.tensor([0.0, 1.0]), margin=1.0)
+
+        loss.backward()
+
+        self.assertGreater(logits.grad.abs().sum().item(), 0.0)
+
+    def test_zero_threshold_margin_rejects_invalid_margin(self):
+        with self.assertRaises(ValueError):
+            zero_threshold_margin_loss(
+                torch.tensor([0.0]),
+                torch.tensor([0.0]),
+                margin=0.0,
+            )
+
     def test_ranking_loss_rewards_fake_logits_above_real_logits(self):
         labels = torch.tensor([0.0, 1.0])
 

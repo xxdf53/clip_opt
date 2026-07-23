@@ -235,6 +235,7 @@ if __name__ == '__main__':
                     f'contrastive={model.loss1.item():.6f} '
                     f'classification={model.loss2.item():.6f} '
                     f'rank={model.loss_rank.item():.6f} '
+                    f'margin={model.loss_margin.item():.6f} '
                     f'local_candidate={model.loss_local_candidate.item():.6f} '
                     f'preserve={model.loss_preserve.item():.6f} '
                     f'gate_reg={model.loss_gate.item():.6f} '

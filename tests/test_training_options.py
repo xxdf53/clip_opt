@@ -15,6 +15,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.local_fusion, 'adaptive_residual')
         self.assertEqual(args.local_gate_init, 0.01)
         self.assertEqual(args.rank_loss_weight, 0.0)
+        self.assertEqual(args.margin_loss_weight, 0.0)
+        self.assertEqual(args.logit_margin, 1.0)
         self.assertEqual(args.local_candidate_loss_weight, 0.0)
         self.assertEqual(args.gate_supervision_weight, 0.0)
         self.assertEqual(args.gate_target_margin, 0.1)
@@ -26,6 +28,8 @@ class TrainingOptionTests(unittest.TestCase):
             '--init_baseline_checkpoint', 'baseline.pth',
             '--freeze_global_branch',
             '--rank_loss_weight', '1.0',
+            '--margin_loss_weight', '0.5',
+            '--logit_margin', '1.5',
             '--preserve_loss_weight', '0.1',
             '--gate_loss_weight', '0.01',
             '--local_candidate_loss_weight', '1.0',
@@ -36,6 +40,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.init_baseline_checkpoint, 'baseline.pth')
         self.assertTrue(args.freeze_global_branch)
         self.assertEqual(args.rank_loss_weight, 1.0)
+        self.assertEqual(args.margin_loss_weight, 0.5)
+        self.assertEqual(args.logit_margin, 1.5)
         self.assertEqual(args.preserve_loss_weight, 0.1)
         self.assertEqual(args.gate_loss_weight, 0.01)
         self.assertEqual(args.local_candidate_loss_weight, 1.0)

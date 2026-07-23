@@ -12,6 +12,7 @@ from utils.local_objectives import (
     pairwise_ranking_loss,
     relative_gate_supervision_loss,
     residual_candidate_loss,
+    zero_threshold_margin_loss,
 )
 
 from transformers import CLIPModel
@@ -300,6 +301,8 @@ class Trainer(BaseModel):
         self.delr = opt.delr
         self.claloss = opt.claloss
         self.rank_loss_weight = opt.rank_loss_weight
+        self.margin_loss_weight = opt.margin_loss_weight
+        self.logit_margin = opt.logit_margin
         self.preserve_loss_weight = opt.preserve_loss_weight
         self.gate_loss_weight = opt.gate_loss_weight
         self.local_candidate_loss_weight = opt.local_candidate_loss_weight
@@ -353,8 +356,12 @@ class Trainer(BaseModel):
             self.gate_supervision_weight,
         )
         if any(weight < 0 for weight in (
-                self.rank_loss_weight,) + auxiliary_weights):
+                self.rank_loss_weight,
+                self.margin_loss_weight,
+        ) + auxiliary_weights):
             raise ValueError('auxiliary loss weights cannot be negative')
+        if self.logit_margin <= 0:
+            raise ValueError('--logit_margin must be positive')
         if (any(auxiliary_weights) and (
                 not opt.use_local_features
                 or opt.local_fusion != 'adaptive_residual')):
@@ -456,6 +463,16 @@ class Trainer(BaseModel):
         self.loss_rank = self.rank_loss_weight * pairwise_ranking_loss(
             self.classhead, self.label)
         zero = self.classhead.new_zeros(())
+        if self.margin_loss_weight:
+            self.loss_margin = (
+                self.margin_loss_weight * zero_threshold_margin_loss(
+                    self.classhead,
+                    self.label,
+                    margin=self.logit_margin,
+                )
+            )
+        else:
+            self.loss_margin = zero
         if 'gate' in self.components:
             self.loss_local_candidate = (
                 self.local_candidate_loss_weight * residual_candidate_loss(
@@ -489,7 +506,7 @@ class Trainer(BaseModel):
             self.loss_gate_supervision = zero
             self.gate_target_mean = None
         self.loss = (
-            self.loss1 + self.loss2 + self.loss_rank
+            self.loss1 + self.loss2 + self.loss_rank + self.loss_margin
             + self.loss_local_candidate + self.loss_preserve
             + self.loss_gate + self.loss_gate_supervision
         )

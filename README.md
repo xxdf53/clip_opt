@@ -50,6 +50,30 @@ conda activate c2pclip
 ./train_UniversalFakeDetect.sh
 ```
 
+To train a baseline whose real/fake logits are explicitly separated around the
+standard zero decision boundary, enable the optional margin objective. A weight
+of zero preserves the previous training behavior and checkpoint format:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+python scripts/train.py \
+  --dataroot ./ForenSynths_train_val_19test \
+  --textroot ./prefix_caption \
+  --classes car,cat,chair,horse \
+  --clip ./clip-vit-large-patch14 \
+  --checkpoints_dir ./c2p_checkpoints \
+  --name c2p_baseline_margin \
+  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
+  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --delr 0.9 --delr_freq 10 \
+  --logit_margin 1.0 --margin_loss_weight 1.0
+```
+
+The margin loss acts only during training: real logits are encouraged below
+`-logit_margin` and fake logits above `+logit_margin`. Inference remains
+image-only and continues to use the standard zero-logit decision boundary.
+
 New local-feature experiments use an image-adaptive residual gate. Initialize
 the global LoRA and classifier from a matched baseline checkpoint, freeze them,
 and train only the patch residual and gate. The gate starts at `0.01`, so the

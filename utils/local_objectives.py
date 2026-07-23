@@ -2,6 +2,23 @@ import torch
 import torch.nn.functional as F
 
 
+def zero_threshold_margin_loss(logits, labels, margin=1.0):
+    """Place real/fake logits on the correct side of a zero decision boundary.
+
+    Real samples (label 0) are encouraged to stay at or below ``-margin``;
+    fake samples (label 1) are encouraged to stay at or above ``margin``.
+    """
+    if margin <= 0:
+        raise ValueError(f'margin must be positive, got {margin}')
+
+    logits = logits.flatten()
+    labels = labels.flatten().to(dtype=logits.dtype)
+    if logits.numel() != labels.numel():
+        raise ValueError('logits and labels must contain the same samples')
+    signed_labels = labels.mul(2.0).sub(1.0)
+    return F.relu(margin - signed_labels * logits).mean()
+
+
 def pairwise_ranking_loss(logits, labels):
     """Rank every fake above every real sample in the current global batch."""
     logits = logits.flatten()

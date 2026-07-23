@@ -125,6 +125,10 @@ class BaseOptions():
                             help='freeze initialized global LoRA and classifier while training the local residual')
         parser.add_argument('--rank_loss_weight', type=float, default=0.0,
                             help='weight of pairwise real/fake ranking loss')
+        parser.add_argument('--margin_loss_weight', type=float, default=0.0,
+                            help='weight of the zero-threshold logit margin loss')
+        parser.add_argument('--logit_margin', type=float, default=1.0,
+                            help='target absolute real/fake logit margin around zero')
         parser.add_argument('--preserve_loss_weight', type=float, default=0.0,
                             help='weight of confidence-aware residual preservation loss')
         parser.add_argument('--gate_loss_weight', type=float, default=0.0,
