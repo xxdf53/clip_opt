@@ -17,6 +17,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.rank_loss_weight, 0.0)
         self.assertEqual(args.margin_loss_weight, 0.0)
         self.assertEqual(args.logit_margin, 1.0)
+        self.assertEqual(args.anchor_loss_weight, 0.0)
+        self.assertEqual(args.logit_anchor, 3.0)
         self.assertEqual(args.local_candidate_loss_weight, 0.0)
         self.assertEqual(args.gate_supervision_weight, 0.0)
         self.assertEqual(args.gate_target_margin, 0.1)
@@ -30,6 +32,8 @@ class TrainingOptionTests(unittest.TestCase):
             '--rank_loss_weight', '1.0',
             '--margin_loss_weight', '0.5',
             '--logit_margin', '1.5',
+            '--anchor_loss_weight', '0.25',
+            '--logit_anchor', '3.5',
             '--preserve_loss_weight', '0.1',
             '--gate_loss_weight', '0.01',
             '--local_candidate_loss_weight', '1.0',
@@ -42,6 +46,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.rank_loss_weight, 1.0)
         self.assertEqual(args.margin_loss_weight, 0.5)
         self.assertEqual(args.logit_margin, 1.5)
+        self.assertEqual(args.anchor_loss_weight, 0.25)
+        self.assertEqual(args.logit_anchor, 3.5)
         self.assertEqual(args.preserve_loss_weight, 0.1)
         self.assertEqual(args.gate_loss_weight, 0.01)
         self.assertEqual(args.local_candidate_loss_weight, 1.0)

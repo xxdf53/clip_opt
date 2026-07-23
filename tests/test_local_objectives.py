@@ -9,11 +9,49 @@ from utils.local_objectives import (
     relative_gate_supervision_loss,
     relative_gate_target,
     residual_candidate_loss,
+    symmetric_logit_anchor_loss,
     zero_threshold_margin_loss,
 )
 
 
 class LocalObjectiveTests(unittest.TestCase):
+    def test_symmetric_logit_anchor_is_zero_at_both_targets(self):
+        loss = symmetric_logit_anchor_loss(
+            torch.tensor([-3.0, 3.0]),
+            torch.tensor([0.0, 1.0]),
+            anchor=3.0,
+        )
+
+        self.assertEqual(loss.item(), 0.0)
+
+    def test_symmetric_logit_anchor_penalizes_target_deviation(self):
+        labels = torch.tensor([0.0, 1.0])
+
+        near = symmetric_logit_anchor_loss(
+            torch.tensor([-2.5, 2.5]), labels, anchor=3.0)
+        far = symmetric_logit_anchor_loss(
+            torch.tensor([1.0, -1.0]), labels, anchor=3.0)
+
+        self.assertLess(near.item(), far.item())
+
+    def test_symmetric_logit_anchor_pulls_back_overconfident_logits(self):
+        logits = torch.tensor([-5.0, 5.0], requires_grad=True)
+        loss = symmetric_logit_anchor_loss(
+            logits, torch.tensor([0.0, 1.0]), anchor=3.0)
+
+        loss.backward()
+
+        self.assertLess(logits.grad[0].item(), 0.0)
+        self.assertGreater(logits.grad[1].item(), 0.0)
+
+    def test_symmetric_logit_anchor_rejects_invalid_anchor(self):
+        with self.assertRaises(ValueError):
+            symmetric_logit_anchor_loss(
+                torch.tensor([0.0]),
+                torch.tensor([0.0]),
+                anchor=0.0,
+            )
+
     def test_zero_threshold_margin_is_zero_past_both_margins(self):
         loss = zero_threshold_margin_loss(
             torch.tensor([-1.5, 1.5]),

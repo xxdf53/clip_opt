@@ -129,6 +129,10 @@ class BaseOptions():
                             help='weight of the zero-threshold logit margin loss')
         parser.add_argument('--logit_margin', type=float, default=1.0,
                             help='target absolute real/fake logit margin around zero')
+        parser.add_argument('--anchor_loss_weight', type=float, default=0.0,
+                            help='weight of the symmetric logit anchor loss')
+        parser.add_argument('--logit_anchor', type=float, default=3.0,
+                            help='absolute real/fake target for logit anchoring')
         parser.add_argument('--preserve_loss_weight', type=float, default=0.0,
                             help='weight of confidence-aware residual preservation loss')
         parser.add_argument('--gate_loss_weight', type=float, default=0.0,

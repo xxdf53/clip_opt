@@ -74,6 +74,31 @@ The margin loss acts only during training: real logits are encouraged below
 `-logit_margin` and fake logits above `+logit_margin`. Inference remains
 image-only and continues to use the standard zero-logit decision boundary.
 
+Unlike the hinge-style margin, the symmetric Smooth L1 anchor remains active
+when logits move beyond their targets. Use it as a separate baseline experiment
+with the margin objective disabled:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+python scripts/train.py \
+  --dataroot ./ForenSynths_train_val_19test \
+  --textroot ./prefix_caption \
+  --classes car,cat,chair,horse \
+  --clip ./clip-vit-large-patch14 \
+  --checkpoints_dir ./c2p_checkpoints \
+  --name c2p_baseline_anchor \
+  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
+  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --delr 0.9 --delr_freq 10 \
+  --margin_loss_weight 0.0 \
+  --logit_anchor 3.0 --anchor_loss_weight 1.0
+```
+
+Training logs include the anchor loss, real/fake batch logit means, and the
+mean absolute deviation of each class from its symmetric anchor. The objective
+does not add model parameters or alter image-only inference.
+
 New local-feature experiments use an image-adaptive residual gate. Initialize
 the global LoRA and classifier from a matched baseline checkpoint, freeze them,
 and train only the patch residual and gate. The gate starts at `0.01`, so the

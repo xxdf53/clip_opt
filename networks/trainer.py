@@ -12,6 +12,7 @@ from utils.local_objectives import (
     pairwise_ranking_loss,
     relative_gate_supervision_loss,
     residual_candidate_loss,
+    symmetric_logit_anchor_loss,
     zero_threshold_margin_loss,
 )
 
@@ -303,6 +304,8 @@ class Trainer(BaseModel):
         self.rank_loss_weight = opt.rank_loss_weight
         self.margin_loss_weight = opt.margin_loss_weight
         self.logit_margin = opt.logit_margin
+        self.anchor_loss_weight = opt.anchor_loss_weight
+        self.logit_anchor = opt.logit_anchor
         self.preserve_loss_weight = opt.preserve_loss_weight
         self.gate_loss_weight = opt.gate_loss_weight
         self.local_candidate_loss_weight = opt.local_candidate_loss_weight
@@ -358,10 +361,13 @@ class Trainer(BaseModel):
         if any(weight < 0 for weight in (
                 self.rank_loss_weight,
                 self.margin_loss_weight,
+                self.anchor_loss_weight,
         ) + auxiliary_weights):
             raise ValueError('auxiliary loss weights cannot be negative')
         if self.logit_margin <= 0:
             raise ValueError('--logit_margin must be positive')
+        if self.logit_anchor <= 0:
+            raise ValueError('--logit_anchor must be positive')
         if (any(auxiliary_weights) and (
                 not opt.use_local_features
                 or opt.local_fusion != 'adaptive_residual')):
@@ -473,6 +479,47 @@ class Trainer(BaseModel):
             )
         else:
             self.loss_margin = zero
+        if self.anchor_loss_weight:
+            self.loss_anchor = (
+                self.anchor_loss_weight * symmetric_logit_anchor_loss(
+                    self.classhead,
+                    self.label,
+                    anchor=self.logit_anchor,
+                )
+            )
+
+            with torch.no_grad():
+                labels = self.label.flatten()
+                logits = self.classhead.detach().flatten()
+                targets = labels.mul(2.0).sub(1.0).mul(self.logit_anchor)
+                real_mask = labels < 0.5
+                fake_mask = ~real_mask
+
+                def masked_mean(values, mask):
+                    weights = mask.to(dtype=values.dtype)
+                    count = weights.sum()
+                    mean = (values * weights).sum() / count.clamp_min(1.0)
+                    return torch.where(
+                        count > 0,
+                        mean,
+                        values.new_tensor(float('nan')),
+                    )
+
+                self.real_logit_mean = masked_mean(logits, real_mask)
+                self.fake_logit_mean = masked_mean(logits, fake_mask)
+                deviations = (logits - targets).abs()
+                self.real_anchor_deviation = masked_mean(
+                    deviations, real_mask)
+                self.fake_anchor_deviation = masked_mean(
+                    deviations, fake_mask)
+        else:
+            self.loss_anchor = zero
+            not_available = self.classhead.new_tensor(float('nan'))
+            self.real_logit_mean = not_available
+            self.fake_logit_mean = not_available
+            self.real_anchor_deviation = not_available
+            self.fake_anchor_deviation = not_available
+
         if 'gate' in self.components:
             self.loss_local_candidate = (
                 self.local_candidate_loss_weight * residual_candidate_loss(
@@ -506,7 +553,8 @@ class Trainer(BaseModel):
             self.loss_gate_supervision = zero
             self.gate_target_mean = None
         self.loss = (
-            self.loss1 + self.loss2 + self.loss_rank + self.loss_margin
+            self.loss1 + self.loss2 + self.loss_rank
+            + self.loss_margin + self.loss_anchor
             + self.loss_local_candidate + self.loss_preserve
             + self.loss_gate + self.loss_gate_supervision
         )

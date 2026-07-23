@@ -2,6 +2,19 @@ import torch
 import torch.nn.functional as F
 
 
+def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):
+    """Keep real/fake logits near fixed symmetric targets around zero."""
+    if anchor <= 0:
+        raise ValueError(f'anchor must be positive, got {anchor}')
+
+    logits = logits.flatten()
+    labels = labels.flatten().to(dtype=logits.dtype)
+    if logits.numel() != labels.numel():
+        raise ValueError('logits and labels must contain the same samples')
+    targets = labels.mul(2.0).sub(1.0).mul(anchor)
+    return F.smooth_l1_loss(logits, targets)
+
+
 def zero_threshold_margin_loss(logits, labels, margin=1.0):
     """Place real/fake logits on the correct side of a zero decision boundary.
 
