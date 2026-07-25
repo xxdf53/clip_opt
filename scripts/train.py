@@ -229,34 +229,20 @@ if __name__ == '__main__':
             #   loss1 = 对比损失（图文对齐）  loss2 = 分类损失（BCE）
             #   loss  = loss1 + claloss * loss2
             if model.total_steps % opt.loss_freq == 0:
-                local_gate = model.get_local_gate_value()
                 losses = (
                     f'loss={model.loss.item():.6f} '
                     f'contrastive={model.loss1.item():.6f} '
                     f'classification={model.loss2.item():.6f} '
                     f'rank={model.loss_rank.item():.6f} '
-                    f'margin={model.loss_margin.item():.6f} '
                     f'anchor={model.loss_anchor.item():.6f} '
                     f'logit_real={model.real_logit_mean.item():.6f} '
                     f'logit_fake={model.fake_logit_mean.item():.6f} '
                     f'anchor_err_real={model.real_anchor_deviation.item():.6f} '
-                    f'anchor_err_fake={model.fake_anchor_deviation.item():.6f} '
-                    f'local_candidate={model.loss_local_candidate.item():.6f} '
-                    f'preserve={model.loss_preserve.item():.6f} '
-                    f'gate_reg={model.loss_gate.item():.6f} '
-                    f'gate_supervision={model.loss_gate_supervision.item():.6f}'
-                )
-                gate_message = (
-                    '' if local_gate is None
-                    else (
-                        f' gate_mean={local_gate:.6f}'
-                        f' gate_target_mean={model.gate_target_mean.item():.6f}'
-                    )
+                    f'anchor_err_fake={model.fake_anchor_deviation.item():.6f}'
                 )
                 print(
                     time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()),
-                    f'{losses} step={model.total_steps} lr={model.lr}'
-                    f'{gate_message}',
+                    f'{losses} step={model.total_steps} lr={model.lr}',
                 )
 
             if should_evaluate(model.total_steps, opt.eval_freq):

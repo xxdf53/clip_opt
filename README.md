@@ -50,33 +50,8 @@ conda activate c2pclip
 ./train_UniversalFakeDetect.sh
 ```
 
-To train a baseline whose real/fake logits are explicitly separated around the
-standard zero decision boundary, enable the optional margin objective. A weight
-of zero preserves the previous training behavior and checkpoint format:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
-python scripts/train.py \
-  --dataroot ./ForenSynths_train_val_19test \
-  --textroot ./prefix_caption \
-  --classes car,cat,chair,horse \
-  --clip ./clip-vit-large-patch14 \
-  --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_baseline_margin \
-  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
-  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --delr 0.9 --delr_freq 10 \
-  --logit_margin 1.0 --margin_loss_weight 1.0
-```
-
-The margin loss acts only during training: real logits are encouraged below
-`-logit_margin` and fake logits above `+logit_margin`. Inference remains
-image-only and continues to use the standard zero-logit decision boundary.
-
-Unlike the hinge-style margin, the symmetric Smooth L1 anchor remains active
-when logits move beyond their targets. Use it as a separate baseline experiment
-with the margin objective disabled:
+The symmetric Smooth L1 anchor keeps real/fake logits near fixed targets around
+the standard zero decision boundary:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -91,7 +66,6 @@ python scripts/train.py \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
-  --margin_loss_weight 0.0 \
   --logit_anchor 3.0 --anchor_loss_weight 1.0
 ```
 
@@ -99,73 +73,13 @@ Training logs include the anchor loss, real/fake batch logit means, and the
 mean absolute deviation of each class from its symmetric anchor. The objective
 does not add model parameters or alter image-only inference.
 
-New local-feature experiments use an image-adaptive residual gate. Initialize
-the global LoRA and classifier from a matched baseline checkpoint, freeze them,
-and train only the patch residual and gate. The gate starts at `0.01`, so the
-initial prediction remains close to the protected baseline:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
-python scripts/train.py \
-  --dataroot ./ForenSynths_train_val_19test \
-  --textroot ./prefix_caption \
-  --classes car,cat,chair,horse \
-  --clip ./clip-vit-large-patch14 \
-  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
-  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --delr 0.9 --delr_freq 10 \
-  --init_baseline_checkpoint ./c2p_checkpoints/baseline/model.pth \
-  --freeze_global_branch \
-  --use_local_features \
-  --local_layer 12 --local_dim 256 \
-  --local_dropout 0.1 --local_pool mean_std \
-  --local_fusion adaptive_residual --local_gate_init 0.01 \
-  --rank_loss_weight 1.0 \
-  --preserve_loss_weight 0.1 \
-  --gate_loss_weight 0.01 \
-  --local_candidate_loss_weight 1.0 \
-  --gate_supervision_weight 1.0 \
-  --gate_target_margin 0.1 \
-  --name c2p_local_relative_gate
-```
-
-The initialization checkpoint must be a non-local model with matching CLIP and
-LoRA dimensions. `concat` and scalar `residual_gate` modes remain available
-only for loading and reproducing earlier experiments. Training logs report all
-auxiliary losses, the mean adaptive gate, and its relative-reliability target.
-The local candidate loss trains a full correction before gate attenuation; the
-gate target is nonzero only when that correction reduces per-image BCE versus
-the protected baseline. This suppresses local intervention on confident global
-predictions while retaining a strong signal on baseline mistakes.
 Experiment directories use a compact name capped at 180 UTF-8 bytes; the full
 configuration remains available in each directory's `opt.txt`.
 
-For a formally aligned full-residual model, use `bounded_residual`. It removes
-the sample gate and applies the same bounded correction during training and
-inference. `residual_alpha` is the residual multiplier and `residual_scale`
-sets the `tanh` bound:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
-python scripts/train.py \
-  --dataroot ./ForenSynths_train_val_19test \
-  --textroot ./prefix_caption \
-  --classes car,cat,chair,horse \
-  --clip ./clip-vit-large-patch14 \
-  --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_local_bounded_residual \
-  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
-  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --delr 0.9 --delr_freq 10 \
-  --init_baseline_checkpoint ./c2p_checkpoints/baseline/model.pth \
-  --freeze_global_branch --use_local_features \
-  --local_layer 12 --local_dim 256 --local_dropout 0.1 \
-  --local_pool mean_std --local_fusion bounded_residual \
-  --residual_alpha 1.0 --residual_scale 4.0 \
-  --rank_loss_weight 1.0
-```
+Legacy local-feature fusion architectures remain loadable by the evaluation
+scripts so existing checkpoints can still be reproduced. Their failed
+experimental auxiliary training objectives are no longer part of the active
+training interface.
 
 ### 2) Inference / Testing
 
