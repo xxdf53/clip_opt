@@ -1,44 +1,20 @@
+"""Evaluate a self-trained C2P-CLIP LoRA checkpoint on binary datasets.
+
+The checkpoint must be produced by scripts/train.py and contain ``model`` and
+``total_steps``. Evaluation is image-only: captions and text prompts are not
+loaded.
 """
-=============================================================================
- test_checkpoint.py — 测试自训练 C2P-CLIP LoRA 模型
-=============================================================================
- 用法（在 VSCode 终端 / Git Bash 中运行）:
 
-   # 1) 测试 UniversalFakeDetect 的 15 个 held-out 类别（评估跨类别泛化）
-   python scripts/test_checkpoint.py \
-       --dataroot ./UniversalFakeDetect/test/ \
-       --checkpoint ./checkpoints/model_epoch_9_total_steps_810_testacc_50.069.pth
-
-   # 2) 测试 GenImage（跨生成器泛化）
-   python scripts/test_checkpoint.py \
-       --dataroot ./GenImage_Dataset/test/ \
-       --checkpoint ./checkpoints/model_epoch_9_total_steps_810_testacc_50.069.pth
-
-   # 3) 测试 Chameleon
-   python scripts/test_checkpoint.py \
-       --dataroot ./Chameleon/test/ \
-       --checkpoint ./checkpoints/model_epoch_9_total_steps_810_testacc_50.069.pth
-
-   # 4) 指定 batch_size / GPU
-   python scripts/test_checkpoint.py \
-       --dataroot ./UniversalFakeDetect/test/ \
-       --checkpoint ./checkpoints/model_epoch_9_total_steps_810_testacc_50.069.pth \
-       --batch_size 64 --gpu 0
-
-=============================================================================
-"""
+import argparse
 import sys
-import os
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import time
-import argparse
 import torch
 
-from networks.trainer import CLIPModel_lora
 from utils.binary_dataset_layout import discover_binary_groups
 from utils.binary_evaluation import (
     evaluate_groups,
@@ -46,127 +22,40 @@ from utils.binary_evaluation import (
     format_metrics,
     write_predictions_csv,
 )
-from utils.checkpoint_loading import (
-    LOCAL_FUSIONS,
-    extract_training_state_dict,
-    parse_gate_override,
-    resolve_local_fusion,
-)
+from utils.checkpoint_loading import load_self_trained_checkpoint
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description='Test self-trained C2P-CLIP LoRA checkpoint')
-    parser.add_argument('--dataroot',    type=str, required=True,
-                        help='test dataset root (e.g., ./UniversalFakeDetect/test/)')
-    parser.add_argument('--checkpoint',  type=str,
-                        default=os.path.join(str(ROOT), 'checkpoints',
-                                             'model_epoch_9_total_steps_810_testacc_50.069.pth'),
-                        help='path to .pth checkpoint')
-    parser.add_argument('--clip_path',   type=str,
-                        default=os.path.join(str(ROOT), 'clip-vit-large-patch14'),
-                        help='path to CLIP ViT-L/14 model')
-    parser.add_argument('--batch_size',  type=int, default=64)
-    parser.add_argument('--gpu',         type=int, default=0)
+    parser = argparse.ArgumentParser(
+        description='Test a self-trained C2P-CLIP LoRA checkpoint')
+    parser.add_argument(
+        '--dataroot',
+        required=True,
+        help='binary dataset root with direct or nested 0_real/1_fake folders',
+    )
+    parser.add_argument('--checkpoint', required=True, help='train.py .pth file')
+    parser.add_argument(
+        '--clip_path',
+        default=str(ROOT / 'clip-vit-large-patch14'),
+        help='local CLIP ViT-L/14 model directory',
+    )
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument(
         '--predictions_csv',
         help='optional CSV path for per-image raw logits and scores',
     )
-    parser.add_argument('--lora_r',      type=int, default=16)
-    parser.add_argument('--lora_alpha',  type=int, default=32)
-    parser.add_argument('--lora_dropout',type=float, default=0.1)
-    parser.add_argument('--use_local_features', action='store_true')
-    parser.add_argument('--local_layer', type=int, default=12)
-    parser.add_argument('--local_dim', type=int, default=256)
-    parser.add_argument('--local_dropout', type=float, default=0.1)
-    parser.add_argument('--local_pool', choices=['mean', 'mean_std'],
-                        default='mean_std')
-    parser.add_argument('--local_fusion',
-                        choices=['auto'] + list(LOCAL_FUSIONS),
-                        default='auto',
-                        help='auto-detect the local fusion from checkpoint keys')
-    parser.add_argument('--local_gate_init', type=float, default=0.01,
-                        help='constructor value; checkpoint restores the learned gate')
-    parser.add_argument('--residual_alpha', type=float, default=1.0,
-                        help='constructor value; bounded checkpoint restores it')
-    parser.add_argument('--residual_scale', type=float, default=4.0,
-                        help='constructor value; bounded checkpoint restores it')
-    parser.add_argument(
-        '--gate_override', type=parse_gate_override, default=None,
-        metavar='learned|FLOAT',
-        help='use learned gates or force every gate to a value in [0, 1]')
+    parser.add_argument('--lora_r', type=int, default=16)
+    parser.add_argument('--lora_alpha', type=int, default=32)
+    parser.add_argument('--lora_dropout', type=float, default=0.1)
     args = parser.parse_args(argv)
+
     if args.batch_size <= 0:
         parser.error('--batch_size must be positive')
     if args.num_workers < 0:
         parser.error('--num_workers cannot be negative')
     return args
-
-
-def load_checkpoint(checkpoint_path, clip_path, lora_r, lora_alpha,
-                    lora_dropout, device, use_local_features=False,
-                    local_layer=12, local_dim=256, local_dropout=0.1,
-                    local_pool='mean_std', local_fusion='auto',
-                    local_gate_init=0.01, residual_alpha=1.0,
-                    residual_scale=4.0):
-    """
-    加载训练保存的 LoRA checkpoint。
-
-    checkpoint 格式（由 base_model.py save_networks 保存）:
-      {
-          'model': <nn.DataParallel(CLIPModel_lora) 的 state_dict>,
-          'total_steps': int
-      }
-
-    关键处理：state_dict 中的 key 带 'module.' 前缀（DataParallel 导致），
-    加载到单卡时需去除。
-    """
-    print(f'Loading checkpoint: {checkpoint_path}')
-    raw = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-
-    new_state_dict, total_steps = extract_training_state_dict(raw)
-    print('  Total training steps: '
-          f'{total_steps if total_steps is not None else "unknown"}')
-    resolved_local_fusion = resolve_local_fusion(
-        new_state_dict,
-        requested=local_fusion,
-        use_local_features=use_local_features,
-    )
-    if use_local_features:
-        print(f'  Local fusion: {resolved_local_fusion}')
-
-    # 创建与训练时相同结构的模型
-    model = CLIPModel_lora(
-        name=clip_path,
-        num_classes=1,
-        lora_r=lora_r,
-        lora_alpha=lora_alpha,
-        lora_dropout=lora_dropout,
-        use_local_features=use_local_features,
-        local_layer=local_layer,
-        local_dim=local_dim,
-        local_dropout=local_dropout,
-        local_pool=local_pool,
-        local_fusion=resolved_local_fusion,
-        local_gate_init=local_gate_init,
-        residual_alpha=residual_alpha,
-        residual_scale=residual_scale,
-    )
-    model.load_state_dict(new_state_dict, strict=True)
-    model.to(device)
-    model.eval()
-
-    gate = model.local_gate_value()
-    if gate is not None:
-        print(f'  Learned local gate: {gate.detach().item():.6f}')
-    if model.local_fusion == 'bounded_residual':
-        print(
-            '  Bounded residual: '
-            f'alpha={model.residual_alpha.item():.6f}, '
-            f'scale={model.residual_scale.item():.6f}')
-
-    print(f'  Model loaded successfully.')
-    return model
 
 
 def resolve_existing_path(path, description, expect_directory):
@@ -189,8 +78,31 @@ def resolve_device(gpu):
     return torch.device(f'cuda:{gpu}')
 
 
-def lora_forward_logits(model, images, gate_override=None):
-    return model.forward_components(images, gate_override=gate_override)
+def load_checkpoint(
+    checkpoint_path,
+    clip_path,
+    lora_r,
+    lora_alpha,
+    lora_dropout,
+    device,
+):
+    print(f'Loading checkpoint: {checkpoint_path}')
+    model, total_steps = load_self_trained_checkpoint(
+        checkpoint_path=checkpoint_path,
+        clip_path=clip_path,
+        lora_r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
+        device=device,
+    )
+    steps = total_steps if total_steps is not None else 'unknown'
+    print(f'  Total training steps: {steps}')
+    print('  Model loaded successfully.')
+    return model
+
+
+def lora_forward_logits(model, images):
+    return model(images, None, None, cla=True)
 
 
 def main(argv=None):
@@ -205,37 +117,23 @@ def main(argv=None):
     device = resolve_device(args.gpu)
 
     model = load_checkpoint(
-        str(checkpoint), str(clip_path),
-        args.lora_r, args.lora_alpha, args.lora_dropout, device,
-        use_local_features=args.use_local_features,
-        local_layer=args.local_layer,
-        local_dim=args.local_dim,
-        local_dropout=args.local_dropout,
-        local_pool=args.local_pool,
-        local_fusion=args.local_fusion,
-        local_gate_init=args.local_gate_init,
-        residual_alpha=args.residual_alpha,
-        residual_scale=args.residual_scale,
+        checkpoint_path=checkpoint,
+        clip_path=clip_path,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        device=device,
     )
-    if (args.gate_override is not None
-            and model.local_fusion not in (
-                'residual_gate', 'adaptive_residual')):
-        raise ValueError('--gate_override requires a gated local checkpoint')
 
     print(f'Dataset: {dataroot}')
     print(f'Generators: {len(groups)}')
     print(f'Device: {device}')
     print(f'Model: {checkpoint}')
-    if model.local_fusion in ('residual_gate', 'adaptive_residual'):
-        print('Gate mode: ' + (
-            'learned' if args.gate_override is None
-            else f'fixed {args.gate_override:.6f}'))
-    t_start = time.time()
+    start_time = time.time()
     print('\n' + '=' * 92)
     summary = evaluate_groups(
         groups,
-        forward_logits=lambda images: lora_forward_logits(
-            model, images, gate_override=args.gate_override),
+        forward_logits=lambda images: lora_forward_logits(model, images),
         device=device,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -244,7 +142,7 @@ def main(argv=None):
             print('     ' + format_diagnostics(metrics, stats)),
         ),
     )
-    elapsed = time.time() - t_start
+    elapsed = time.time() - start_time
 
     print('=' * 92)
     print('     ' + format_metrics('Macro mean', summary['macro_metrics']))
@@ -252,22 +150,6 @@ def main(argv=None):
     print('     ' + format_metrics('Overall', summary['overall_metrics']))
     print('     ' + format_diagnostics(
         summary['overall_metrics'], summary['overall_logit_stats']))
-    gate_field = (
-        'learned_gate'
-        if any('learned_gate' in record for record in summary['predictions'])
-        else 'gate'
-    )
-    gates = [
-        record[gate_field] for record in summary['predictions']
-        if gate_field in record
-    ]
-    if gates:
-        gate_tensor = torch.tensor(gates)
-        print(
-            '     Learned gate          '
-            f'mean={gate_tensor.mean():.6f}  '
-            f'std={gate_tensor.std(unbiased=False):.6f}  '
-            f'min={gate_tensor.min():.6f}  max={gate_tensor.max():.6f}')
     if args.predictions_csv:
         output_path = write_predictions_csv(
             summary['predictions'], args.predictions_csv)

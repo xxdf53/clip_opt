@@ -1,30 +1,7 @@
 """Plot raw-logit distributions from self-trained C2P-CLIP checkpoints.
 
-Examples:
-  # Baseline LoRA model
-  python scripts/plot_logit_dist.py \
-    --dataroot ./my_first_test \
-    --checkpoint ./c2p_checkpoints/baseline/model.pth \
-    --clip_path ./clip-vit-large-patch14 \
-    --lora_r 6 --lora_alpha 6 --lora_dropout 0.8
-
-  # Local-feature LoRA model
-  python scripts/plot_logit_dist.py \
-    --dataroot ./my_first_test \
-    --checkpoint ./c2p_checkpoints/local/model.pth \
-    --clip_path ./clip-vit-large-patch14 \
-    --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-    --use_local_features --local_layer 12 --local_dim 256 \
-    --local_dropout 0.1 --local_pool mean_std
-
-  # Baseline and local model on shared axes
-  python scripts/plot_logit_dist.py \
-    --dataroot ./my_first_test \
-    --checkpoint ./c2p_checkpoints/baseline/model.pth \
-    --compare_checkpoint ./c2p_checkpoints/local/model.pth \
-    --compare_use_local_features \
-    --clip_path ./clip-vit-large-patch14 \
-    --lora_r 6 --lora_alpha 6 --lora_dropout 0.8
+One or two baseline/Logit Anchor checkpoints can be compared with shared bins
+and axes. Both checkpoints must use the same LoRA configuration.
 """
 
 import argparse
@@ -42,70 +19,53 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
 
-from data.datasets import _TranslateDuplicate, pil_loader
-from networks.trainer import CLIPModel_lora
-from utils.checkpoint_loading import (
-    LOCAL_FUSIONS,
-    extract_training_state_dict,
-    parse_gate_override,
-    resolve_local_fusion,
-)
+from utils.binary_dataset_layout import discover_binary_groups
+from utils.binary_evaluation import build_group_dataset, build_transform
+from utils.checkpoint_loading import load_self_trained_checkpoint
 from utils.logit_distribution import build_shared_bin_edges, compute_logit_stats
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description='Plot raw-logit distributions from train.py LoRA checkpoints')
+        description='Plot raw logits from train.py LoRA checkpoints')
     parser.add_argument(
-        '--dataroot', required=True,
-        help='binary image dataset containing 0_real/ and 1_fake/')
+        '--dataroot',
+        required=True,
+        help='binary dataset root with direct or nested 0_real/1_fake folders',
+    )
     parser.add_argument(
-        '--checkpoint', required=True,
-        help='primary train.py checkpoint containing model and total_steps')
-    parser.add_argument('--checkpoint_label', default='Baseline')
+        '--checkpoint',
+        required=True,
+        help='primary train.py checkpoint containing model and total_steps',
+    )
+    parser.add_argument('--checkpoint_label', default='Primary')
     parser.add_argument(
         '--compare_checkpoint',
-        help='optional second train.py checkpoint plotted on the same axes')
-    parser.add_argument('--compare_label', default='Local')
-    parser.add_argument('--compare_use_local_features', action='store_true')
+        help='optional second checkpoint plotted on the same axes',
+    )
+    parser.add_argument('--compare_label', default='Comparison')
     parser.add_argument(
-        '--compare_local_fusion',
-        choices=['auto'] + list(LOCAL_FUSIONS), default='auto')
-    parser.add_argument(
-        '--compare_gate_override', type=parse_gate_override, default=None,
-        metavar='learned|FLOAT')
-    parser.add_argument(
-        '--clip_path', default=str(ROOT / 'clip-vit-large-patch14'),
-        help='local CLIP ViT-L/14 model directory')
+        '--clip_path',
+        default=str(ROOT / 'clip-vit-large-patch14'),
+        help='local CLIP ViT-L/14 model directory',
+    )
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--lora_r', type=int, default=16)
     parser.add_argument('--lora_alpha', type=int, default=32)
     parser.add_argument('--lora_dropout', type=float, default=0.1)
-    parser.add_argument('--use_local_features', action='store_true')
-    parser.add_argument('--local_layer', type=int, default=12)
-    parser.add_argument('--local_dim', type=int, default=256)
-    parser.add_argument('--local_dropout', type=float, default=0.1)
-    parser.add_argument(
-        '--local_pool', choices=['mean', 'mean_std'], default='mean_std')
-    parser.add_argument(
-        '--local_fusion', choices=['auto'] + list(LOCAL_FUSIONS),
-        default='auto')
-    parser.add_argument('--local_gate_init', type=float, default=0.01)
-    parser.add_argument('--residual_alpha', type=float, default=1.0)
-    parser.add_argument('--residual_scale', type=float, default=4.0)
-    parser.add_argument(
-        '--gate_override', type=parse_gate_override, default=None,
-        metavar='learned|FLOAT')
     parser.add_argument('--bins', type=int, default=100)
     parser.add_argument('--save', default='logit_distribution.png')
     args = parser.parse_args(argv)
 
-    if args.compare_use_local_features and not args.compare_checkpoint:
-        parser.error('--compare_use_local_features requires --compare_checkpoint')
+    if args.batch_size <= 0:
+        parser.error('--batch_size must be positive')
+    if args.num_workers < 0:
+        parser.error('--num_workers cannot be negative')
+    if args.bins <= 0:
+        parser.error('--bins must be positive')
     return args
 
 
@@ -120,26 +80,13 @@ def resolve_device(gpu):
 
 
 def build_image_loader(dataroot, batch_size, num_workers, device):
-    transform = transforms.Compose([
-        _TranslateDuplicate(224),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.48145466, 0.4578275, 0.40821073],
-            std=[0.26862954, 0.26130258, 0.27577711],
-        ),
-    ])
-    dataset = datasets.ImageFolder(
-        root=str(Path(dataroot).expanduser()),
-        transform=transform,
-        loader=pil_loader,
-    )
-    expected_classes = {'0_real': 0, '1_fake': 1}
-    if dataset.class_to_idx != expected_classes:
-        raise ValueError(
-            f'dataroot must contain exactly 0_real/ and 1_fake/; '
-            f'found {dataset.class_to_idx}')
-
+    groups = discover_binary_groups(dataroot)
+    leaves = [
+        leaf
+        for group_leaves in groups.values()
+        for leaf in group_leaves
+    ]
+    dataset = build_group_dataset(leaves, build_transform())
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -150,66 +97,30 @@ def build_image_loader(dataroot, batch_size, num_workers, device):
     )
 
 
-def load_lora_checkpoint(checkpoint_path, args, device, use_local_features,
-                         local_fusion='auto'):
+def load_lora_checkpoint(checkpoint_path, args, device):
     checkpoint_path = Path(checkpoint_path).expanduser().resolve()
-    if not checkpoint_path.is_file():
-        raise FileNotFoundError(f'checkpoint not found: {checkpoint_path}')
-
     print(f'Loading checkpoint: {checkpoint_path}')
-    payload = torch.load(
-        str(checkpoint_path), map_location='cpu', weights_only=True)
-    state_dict, total_steps = extract_training_state_dict(payload)
-    print(f'  Total training steps: '
-          f'{total_steps if total_steps is not None else "unknown"}')
-    resolved_local_fusion = resolve_local_fusion(
-        state_dict,
-        requested=local_fusion,
-        use_local_features=use_local_features,
-    )
-    if use_local_features:
-        print(f'  Local fusion: {resolved_local_fusion}')
-
-    model = CLIPModel_lora(
-        name=args.clip_path,
-        num_classes=1,
+    model, total_steps = load_self_trained_checkpoint(
+        checkpoint_path=checkpoint_path,
+        clip_path=args.clip_path,
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
-        use_local_features=use_local_features,
-        local_layer=args.local_layer,
-        local_dim=args.local_dim,
-        local_dropout=args.local_dropout,
-        local_pool=args.local_pool,
-        local_fusion=resolved_local_fusion,
-        local_gate_init=args.local_gate_init,
-        residual_alpha=args.residual_alpha,
-        residual_scale=args.residual_scale,
+        device=device,
     )
-    model.load_state_dict(state_dict, strict=True)
-    model.to(device)
-    model.eval()
-    gate = model.local_gate_value()
-    if gate is not None:
-        print(f'  Learned local gate: {gate.detach().item():.6f}')
-    if model.local_fusion == 'bounded_residual':
-        print(
-            '  Bounded residual: '
-            f'alpha={model.residual_alpha.item():.6f}, '
-            f'scale={model.residual_scale.item():.6f}')
+    steps = total_steps if total_steps is not None else 'unknown'
+    print(f'  Total training steps: {steps}')
     return model
 
 
-def collect_raw_logits(model, data_loader, device, gate_override=None):
+def collect_raw_logits(model, data_loader, device):
     real_logits = []
     fake_logits = []
 
     with torch.no_grad():
-        for images, labels in data_loader:
+        for images, labels, _paths in data_loader:
             images = images.to(device, non_blocking=True)
-            logits = model.forward_components(
-                images, gate_override=gate_override)['final_logits']
-            logits = logits.flatten().cpu()
+            logits = model(images, None, None, cla=True).flatten().cpu()
             labels = labels.flatten()
             real_logits.extend(logits[labels == 0].tolist())
             fake_logits.extend(logits[labels == 1].tolist())
@@ -224,18 +135,11 @@ def release_device_memory(device):
         torch.cuda.empty_cache()
 
 
-def analyze_checkpoint(label, checkpoint, use_local_features, local_fusion,
-                       gate_override, args, data_loader, device):
-    model = load_lora_checkpoint(
-        checkpoint, args, device, use_local_features=use_local_features,
-        local_fusion=local_fusion)
-    if (gate_override is not None
-            and model.local_fusion not in (
-                'residual_gate', 'adaptive_residual')):
-        raise ValueError('gate override requires a gated local checkpoint')
+def analyze_checkpoint(label, checkpoint, args, data_loader, device):
+    model = load_lora_checkpoint(checkpoint, args, device)
     try:
         real_logits, fake_logits = collect_raw_logits(
-            model, data_loader, device, gate_override=gate_override)
+            model, data_loader, device)
     finally:
         del model
         release_device_memory(device)
@@ -260,12 +164,12 @@ def print_stats(result):
 
 
 def plot_results(results, bins, save_path):
-    bin_edges = np.asarray(build_shared_bin_edges(
-        [distribution
-         for result in results
-         for distribution in (result['real'], result['fake'])],
-        bins=bins,
-    ))
+    distributions = [
+        distribution
+        for result in results
+        for distribution in (result['real'], result['fake'])
+    ]
+    bin_edges = np.asarray(build_shared_bin_edges(distributions, bins=bins))
     colors = [('seagreen', 'firebrick'), ('royalblue', 'darkorange')]
 
     plt.figure(figsize=(11, 6.5))
@@ -275,17 +179,31 @@ def plot_results(results, bins, save_path):
         alpha = 0.35 if index == 0 else 0.9
         linewidth = 1.2 if index == 0 else 2.0
         plt.hist(
-            result['real'], bins=bin_edges, histtype=histtype,
-            alpha=alpha, linewidth=linewidth, color=real_color,
-            label=f"{result['label']} Real (n={len(result['real'])})")
+            result['real'],
+            bins=bin_edges,
+            histtype=histtype,
+            alpha=alpha,
+            linewidth=linewidth,
+            color=real_color,
+            label=f"{result['label']} Real (n={len(result['real'])})",
+        )
         plt.hist(
-            result['fake'], bins=bin_edges, histtype=histtype,
-            alpha=alpha, linewidth=linewidth, color=fake_color,
-            label=f"{result['label']} Fake (n={len(result['fake'])})")
+            result['fake'],
+            bins=bin_edges,
+            histtype=histtype,
+            alpha=alpha,
+            linewidth=linewidth,
+            color=fake_color,
+            label=f"{result['label']} Fake (n={len(result['fake'])})",
+        )
 
     plt.axvline(
-        x=0.0, color='black', linestyle='--', linewidth=1.5,
-        label='Decision boundary (logit=0)')
+        x=0.0,
+        color='black',
+        linestyle='--',
+        linewidth=1.5,
+        label='Decision boundary (logit=0)',
+    )
     plt.xlim(bin_edges[0], bin_edges[-1])
     plt.xlabel('Raw classifier logit', fontsize=13)
     plt.ylabel('Count', fontsize=13)
@@ -316,9 +234,6 @@ def main(argv=None):
     results = [analyze_checkpoint(
         args.checkpoint_label,
         args.checkpoint,
-        args.use_local_features,
-        args.local_fusion,
-        args.gate_override,
         args,
         data_loader,
         device,
@@ -327,9 +242,6 @@ def main(argv=None):
         results.append(analyze_checkpoint(
             args.compare_label,
             args.compare_checkpoint,
-            args.compare_use_local_features,
-            args.compare_local_fusion,
-            args.compare_gate_override,
             args,
             data_loader,
             device,

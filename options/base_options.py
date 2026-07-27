@@ -1,16 +1,18 @@
 import argparse
 import os
 import time
-import utils.util as util
+
 import torch
-#import models
-#import data
+
+import utils.util as util
 
 
 MAX_EXPERIMENT_NAME_BYTES = 180
 
 
 def _truncate_utf8(text, max_bytes=MAX_EXPERIMENT_NAME_BYTES):
+    if max_bytes <= 0:
+        return 'experiment'
     encoded = text.encode('utf-8')
     if len(encoded) <= max_bytes:
         return text
@@ -25,36 +27,28 @@ def build_experiment_name(opt, timestamp=None):
         character if character.isalnum() or character in '-_.' else '_'
         for character in opt.name.strip()
     ) or 'experiment'
-    parts = [
-        base_name,
+    configuration_parts = [
         timestamp,
         f's{opt.seed}',
         f'r{opt.lora_r}a{opt.lora_alpha}d{opt.lora_dropout}',
         f'lr{opt.lr}',
         f'c{opt.claloss}',
     ]
-    if opt.use_local_features:
-        fusion_names = {
-            'concat': 'cat',
-            'residual_gate': 'sg',
-            'adaptive_residual': 'ar',
-            'bounded_residual': 'br',
-        }
-        pool_name = 'ms' if opt.local_pool == 'mean_std' else 'm'
-        local_name = (
-            f'L{opt.local_layer}-{pool_name}-d{opt.local_dim}-'
-            f'{fusion_names[opt.local_fusion]}')
-        if opt.local_fusion == 'bounded_residual':
-            local_name += (
-                f'-a{opt.residual_alpha}-s{opt.residual_scale}')
-        parts.append(local_name)
-        if opt.freeze_global_branch:
-            parts.append('fg')
-        elif opt.freeze_vision_lora:
-            parts.append('fv')
-    return _truncate_utf8('__'.join(parts))
+    if opt.anchor_loss_weight > 0:
+        configuration_parts.append(
+            f'anchor-w{opt.anchor_loss_weight}-t{opt.logit_anchor}')
 
-class BaseOptions():
+    configuration = '__'.join(configuration_parts)
+    available_base_bytes = (
+        MAX_EXPERIMENT_NAME_BYTES
+        - len(configuration.encode('utf-8'))
+        - len('__'.encode('utf-8'))
+    )
+    base_name = _truncate_utf8(base_name, max_bytes=available_base_bytes)
+    return f'{base_name}__{configuration}'
+
+
+class BaseOptions:
     def __init__(self):
         self.initialized = False
 
@@ -95,46 +89,16 @@ class BaseOptions():
         parser.add_argument('--delr',            type=float, default=0.8, help='delr')
         parser.add_argument('--seed',            type=int, default=123, help='seed')
         parser.add_argument('--clip',            type=str, default='./clip-vit-large-patch14/', help='clip path')
-        parser.add_argument('--claloss',         type=float, default=0.5, help='fixed num layer')
+        parser.add_argument('--claloss',         type=float, default=0.5, help='classification loss weight')
         parser.add_argument('--cates',           nargs='+', default=['Deepfake', 'Camera'])
-        parser.add_argument('--eval_freq',       type=int, default=200, help='eval frequency')
-        parser.add_argument('--lora_r',          type=int, default=16, help='eval frequency')
-        parser.add_argument('--lora_alpha',      type=int, default=32, help='eval frequency')
-        parser.add_argument('--lora_dropout',    type=float, default=0.1, help='eval frequency')
-        parser.add_argument('--use_local_features', action='store_true',
-                            help='fuse an intermediate CLIP patch-token representation into the classifier')
-        parser.add_argument('--local_layer', type=int, default=12,
-                            help='CLIP vision Transformer layer used for local patch features')
-        parser.add_argument('--local_dim', type=int, default=256,
-                            help='projected dimension of the local patch feature')
-        parser.add_argument('--local_dropout', type=float, default=0.1,
-                            help='dropout in the local projector and fused classifier')
-        parser.add_argument('--local_pool', type=str, default='mean_std',
-                            choices=['mean', 'mean_std'],
-                            help='statistics used to aggregate patch tokens')
-        parser.add_argument('--local_fusion', type=str,
-                            default='adaptive_residual',
-                            choices=['concat', 'residual_gate',
-                                     'adaptive_residual', 'bounded_residual'],
-                            help='local/global classifier fusion; the first two modes are retained for old checkpoints')
-        parser.add_argument('--local_gate_init', type=float, default=0.01,
-                            help='initial residual-gate value in (0, 1)')
-        parser.add_argument('--init_baseline_checkpoint', type=str, default='',
-                            help='train.py baseline checkpoint used to initialize the protected global branch')
-        parser.add_argument('--freeze_global_branch', action='store_true',
-                            help='freeze initialized global LoRA and classifier while training the local residual')
-        parser.add_argument('--rank_loss_weight', type=float, default=0.0,
-                            help='weight of pairwise real/fake ranking loss')
+        parser.add_argument('--eval_freq',       type=int, default=200, help='evaluation interval in optimizer steps; 0 disables periodic evaluation')
+        parser.add_argument('--lora_r',          type=int, default=16, help='LoRA rank')
+        parser.add_argument('--lora_alpha',      type=int, default=32, help='LoRA scaling parameter')
+        parser.add_argument('--lora_dropout',    type=float, default=0.1, help='LoRA dropout probability')
         parser.add_argument('--anchor_loss_weight', type=float, default=0.0,
                             help='weight of the symmetric logit anchor loss')
         parser.add_argument('--logit_anchor', type=float, default=3.0,
                             help='absolute real/fake target for logit anchoring')
-        parser.add_argument('--residual_alpha', type=float, default=1.0,
-                            help='fixed multiplier for bounded local residuals')
-        parser.add_argument('--residual_scale', type=float, default=4.0,
-                            help='positive tanh scale and magnitude bound for local residuals')
-        parser.add_argument('--freeze_vision_lora', action='store_true',
-                            help='freeze CLIP vision LoRA and train only newly added heads')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True

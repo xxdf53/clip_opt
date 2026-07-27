@@ -10,17 +10,6 @@ def _flatten_binary_inputs(logits, labels):
     return logits, labels
 
 
-def pairwise_ranking_loss(logits, labels):
-    """Rank every fake above every real sample in the current global batch."""
-    logits, labels = _flatten_binary_inputs(logits, labels)
-    real_logits = logits[labels < 0.5]
-    fake_logits = logits[labels >= 0.5]
-    if real_logits.numel() == 0 or fake_logits.numel() == 0:
-        return logits.sum() * 0.0
-    differences = fake_logits[:, None] - real_logits[None, :]
-    return F.softplus(-differences).mean()
-
-
 def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):
     """Keep real/fake logits near fixed symmetric targets around zero."""
     if anchor <= 0:

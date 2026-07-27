@@ -3,7 +3,6 @@ import unittest
 import torch
 
 from utils.training_objectives import (
-    pairwise_ranking_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -58,24 +57,6 @@ class TrainingObjectiveTests(unittest.TestCase):
         self.assertEqual(diagnostics['fake_logit_mean'].item(), 3.0)
         self.assertEqual(diagnostics['real_anchor_deviation'].item(), 1.0)
         self.assertEqual(diagnostics['fake_anchor_deviation'].item(), 1.0)
-
-    def test_ranking_loss_rewards_fake_logits_above_real_logits(self):
-        labels = torch.tensor([0.0, 1.0])
-
-        good = pairwise_ranking_loss(torch.tensor([-2.0, 2.0]), labels)
-        bad = pairwise_ranking_loss(torch.tensor([2.0, -2.0]), labels)
-
-        self.assertLess(good.item(), bad.item())
-
-    def test_ranking_loss_is_safe_for_single_class_batch(self):
-        logits = torch.tensor([1.0, 2.0], requires_grad=True)
-        loss = pairwise_ranking_loss(logits, torch.ones(2))
-
-        loss.backward()
-
-        self.assertEqual(loss.item(), 0.0)
-        self.assertIsNotNone(logits.grad)
-
 
 if __name__ == '__main__':
     unittest.main()

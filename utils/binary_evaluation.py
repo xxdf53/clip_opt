@@ -19,14 +19,6 @@ PREDICTION_FIELDS = (
     'raw_logit',
     'score',
 )
-OUTPUT_COMPONENT_FIELDS = {
-    'global_logits': 'global_logit',
-    'local_logits': 'local_logit',
-    'residual_logits': 'residual_logit',
-    'gate': 'gate',
-    'learned_gate': 'learned_gate',
-}
-COMPONENT_FIELDS = tuple(OUTPUT_COMPONENT_FIELDS.values())
 
 
 def format_metrics(name, metrics):
@@ -48,16 +40,16 @@ def format_diagnostics(metrics, logit_stats=None):
     if logit_stats is not None:
         text += (
             f'  Logit R={logit_stats["real_mean"]:.3f}'
-            f'±{logit_stats["real_std"]:.3f}'
+            f'+/-{logit_stats["real_std"]:.3f}'
             f'  F={logit_stats["fake_mean"]:.3f}'
-            f'±{logit_stats["fake_std"]:.3f}'
+            f'+/-{logit_stats["fake_std"]:.3f}'
             f'  Sep={logit_stats["separation"]:.3f}'
         )
     return text
 
 
 class PathImageFolder(datasets.ImageFolder):
-    """ImageFolder that also returns the source path for every image."""
+    """ImageFolder that also returns each image's source path."""
 
     def __getitem__(self, index):
         image, label = super().__getitem__(index)
@@ -107,8 +99,14 @@ def build_group_dataset(binary_leaves, transform):
     return ConcatDataset(leaf_datasets)
 
 
-def evaluate_dataset(dataset, generator, forward_logits, device,
-                     batch_size=64, num_workers=4):
+def evaluate_dataset(
+    dataset,
+    generator,
+    forward_logits,
+    device,
+    batch_size=64,
+    num_workers=4,
+):
     """Collect per-image logits from one deterministic image-only dataset."""
     if batch_size <= 0:
         raise ValueError('batch_size must be positive')
@@ -127,49 +125,42 @@ def evaluate_dataset(dataset, generator, forward_logits, device,
     with torch.no_grad():
         for images, labels, paths in loader:
             images = images.to(device, non_blocking=True)
-            forward_output = forward_logits(images)
-            if isinstance(forward_output, torch.Tensor):
-                batch_outputs = {'final_logits': forward_output}
-            elif isinstance(forward_output, Mapping):
-                batch_outputs = forward_output
-            else:
-                raise TypeError(
-                    'forward_logits must return a tensor or component mapping')
-            if 'final_logits' not in batch_outputs:
-                raise ValueError('component mapping must contain final_logits')
+            logits = forward_logits(images)
+            if not isinstance(logits, torch.Tensor):
+                raise TypeError('forward_logits must return a tensor')
 
             labels = labels.detach().flatten().cpu()
-            normalized_outputs = {}
-            for name, values in batch_outputs.items():
-                if not isinstance(values, torch.Tensor):
-                    continue
-                values = values.detach().flatten().cpu()
-                if values.numel() != labels.numel():
-                    raise ValueError(
-                        f'{name} output size must match the label batch size')
-                normalized_outputs[name] = values
-            logits = normalized_outputs['final_logits']
+            logits = logits.detach().flatten().cpu()
+            if logits.numel() != labels.numel():
+                raise ValueError(
+                    'model output size must match the label batch size')
+
             scores = logits.sigmoid()
-            for index, (path, label, raw_logit, score) in enumerate(zip(
-                    paths, labels.tolist(), logits.tolist(), scores.tolist())):
-                record = {
+            for path, label, raw_logit, score in zip(
+                paths,
+                labels.tolist(),
+                logits.tolist(),
+                scores.tolist(),
+            ):
+                predictions.append({
                     'generator': generator,
                     'path': str(Path(path).resolve()),
                     'label': int(label),
                     'raw_logit': float(raw_logit),
                     'score': float(score),
-                }
-                for output_name, field_name in OUTPUT_COMPONENT_FIELDS.items():
-                    if output_name in normalized_outputs:
-                        record[field_name] = float(
-                            normalized_outputs[output_name][index])
-                predictions.append(record)
+                })
     return predictions
 
 
-def evaluate_groups(groups: Mapping[str, Sequence[Path]], forward_logits,
-                    device, batch_size=64, num_workers=4, transform=None,
-                    on_group_complete: Callable | None = None):
+def evaluate_groups(
+    groups: Mapping[str, Sequence[Path]],
+    forward_logits,
+    device,
+    batch_size=64,
+    num_workers=4,
+    transform=None,
+    on_group_complete: Callable | None = None,
+):
     """Evaluate every discovered generator using one shared data contract."""
     if not groups:
         raise ValueError('at least one generator group is required')
@@ -194,11 +185,13 @@ def evaluate_groups(groups: Mapping[str, Sequence[Path]], forward_logits,
         )
         logit_stats = compute_logit_stats(
             [
-                record['raw_logit'] for record in group_predictions
+                record['raw_logit']
+                for record in group_predictions
                 if record['label'] == 0
             ],
             [
-                record['raw_logit'] for record in group_predictions
+                record['raw_logit']
+                for record in group_predictions
                 if record['label'] == 1
             ],
         )
@@ -208,29 +201,37 @@ def evaluate_groups(groups: Mapping[str, Sequence[Path]], forward_logits,
         if on_group_complete is not None:
             on_group_complete(index, generator, metrics, logit_stats)
 
+    metric_names = (
+        'acc',
+        'real_acc',
+        'fake_acc',
+        'ap',
+        'roc_auc',
+        'ece',
+        'brier',
+    )
     macro_metrics = {
-        key: float(np.mean([
-            metrics[key] for metrics in group_metrics.values()
+        name: float(np.mean([
+            metrics[name] for metrics in group_metrics.values()
         ]))
-        for key in (
-            'acc', 'real_acc', 'fake_acc', 'ap',
-            'roc_auc', 'ece', 'brier',
-        )
+        for name in metric_names
     }
     macro_metrics['n'] = sum(
-        metrics['n'] for metrics in group_metrics.values()
-    )
+        metrics['n'] for metrics in group_metrics.values())
+
     overall_metrics = compute_binary_metrics(
         [record['label'] for record in predictions],
         [record['score'] for record in predictions],
     )
     overall_logit_stats = compute_logit_stats(
         [
-            record['raw_logit'] for record in predictions
+            record['raw_logit']
+            for record in predictions
             if record['label'] == 0
         ],
         [
-            record['raw_logit'] for record in predictions
+            record['raw_logit']
+            for record in predictions
             if record['label'] == 1
         ],
     )
@@ -248,13 +249,8 @@ def write_predictions_csv(predictions, output_path):
     """Write the shared per-image prediction format."""
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    component_fields = tuple(
-        field for field in COMPONENT_FIELDS
-        if any(field in record for record in predictions)
-    )
-    fieldnames = PREDICTION_FIELDS[:3] + component_fields + PREDICTION_FIELDS[3:]
     with output_path.open('w', newline='', encoding='utf-8') as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer = csv.DictWriter(csv_file, fieldnames=PREDICTION_FIELDS)
         writer.writeheader()
         writer.writerows(predictions)
     return output_path

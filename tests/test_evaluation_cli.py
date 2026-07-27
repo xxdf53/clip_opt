@@ -2,8 +2,7 @@ import unittest
 
 import torch
 
-from scripts import test_airplane_official
-from scripts import test_checkpoint
+from scripts import test_airplane_official, test_checkpoint
 
 
 class EvaluationCliTests(unittest.TestCase):
@@ -16,54 +15,22 @@ class EvaluationCliTests(unittest.TestCase):
 
         self.assertEqual(args.predictions_csv, 'official.csv')
 
-    def test_lora_cli_accepts_shared_loader_options(self):
+    def test_lora_cli_accepts_shared_loader_and_lora_options(self):
         args = test_checkpoint.parse_args([
             '--dataroot', 'dataset',
             '--checkpoint', 'model.pth',
             '--num_workers', '0',
+            '--lora_r', '6',
+            '--lora_alpha', '6',
+            '--lora_dropout', '0.8',
             '--predictions_csv', 'lora.csv',
         ])
 
         self.assertEqual(args.num_workers, 0)
+        self.assertEqual(args.lora_r, 6)
+        self.assertEqual(args.lora_alpha, 6)
+        self.assertEqual(args.lora_dropout, 0.8)
         self.assertEqual(args.predictions_csv, 'lora.csv')
-        self.assertEqual(args.local_fusion, 'auto')
-
-    def test_lora_cli_accepts_residual_gate_options(self):
-        args = test_checkpoint.parse_args([
-            '--dataroot', 'dataset',
-            '--checkpoint', 'model.pth',
-            '--use_local_features',
-            '--local_fusion', 'residual_gate',
-            '--local_gate_init', '0.02',
-        ])
-
-        self.assertEqual(args.local_fusion, 'residual_gate')
-        self.assertAlmostEqual(args.local_gate_init, 0.02)
-
-    def test_lora_cli_accepts_adaptive_gate_override(self):
-        args = test_checkpoint.parse_args([
-            '--dataroot', 'dataset',
-            '--checkpoint', 'model.pth',
-            '--use_local_features',
-            '--local_fusion', 'adaptive_residual',
-            '--gate_override', '0',
-        ])
-
-        self.assertEqual(args.local_fusion, 'adaptive_residual')
-        self.assertEqual(args.gate_override, 0.0)
-
-    def test_lora_cli_accepts_bounded_residual_options(self):
-        args = test_checkpoint.parse_args([
-            '--dataroot', 'dataset',
-            '--use_local_features',
-            '--local_fusion', 'bounded_residual',
-            '--residual_alpha', '1.0',
-            '--residual_scale', '4.0',
-        ])
-
-        self.assertEqual(args.local_fusion, 'bounded_residual')
-        self.assertEqual(args.residual_alpha, 1.0)
-        self.assertEqual(args.residual_scale, 4.0)
 
     def test_forward_adapters_preserve_model_specific_signatures(self):
         images = torch.zeros(2, 3, 4, 4)
@@ -74,9 +41,9 @@ class EvaluationCliTests(unittest.TestCase):
                 return torch.ones(2, 1)
 
         class LoraModel:
-            def forward_components(self, *args, **kwargs):
+            def __call__(self, *args, **kwargs):
                 self.call = (args, kwargs)
-                return {'final_logits': torch.ones(2, 1)}
+                return torch.ones(2, 1)
 
         official = OfficialModel()
         lora = LoraModel()
@@ -87,7 +54,7 @@ class EvaluationCliTests(unittest.TestCase):
         self.assertEqual(official.call, (images,))
         self.assertEqual(
             lora.call,
-            ((images,), {'gate_override': None}),
+            ((images, None, None), {'cla': True}),
         )
 
 

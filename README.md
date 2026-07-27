@@ -66,20 +66,21 @@ python scripts/train.py \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
-  --logit_anchor 3.0 --anchor_loss_weight 1.0
+  --logit_anchor 3.0 --anchor_loss_weight 0.5
 ```
 
 Training logs include the anchor loss, real/fake batch logit means, and the
 mean absolute deviation of each class from its symmetric anchor. The objective
 does not add model parameters or alter image-only inference.
 
-Experiment directories use a compact name capped at 180 UTF-8 bytes; the full
-configuration remains available in each directory's `opt.txt`.
+Experiment directories use a compact name capped at 180 UTF-8 bytes and record
+the active anchor weight/target. The full configuration remains available in
+each directory's `opt.txt`.
 
-Legacy local-feature fusion architectures remain loadable by the evaluation
-scripts so existing checkpoints can still be reproduced. Their failed
-experimental auxiliary training objectives are no longer part of the active
-training interface.
+The active implementation intentionally contains only the original global
+C2P-CLIP/LoRA architecture and the Logit Anchor objective. Retired local
+feature, residual gate, ranking-loss, and frozen-branch experiments remain
+recoverable from Git history but are not supported by the current CLI.
 
 ### 2) Inference / Testing
 
@@ -106,111 +107,49 @@ python scripts/test_airplane_official.py \
   --predictions_csv ./official_cnn_synth_predictions.csv
 ```
 
-Evaluate a self-trained baseline LoRA checkpoint through the same recursive,
-image-only dataset and preprocessing pipeline:
+Evaluate a self-trained baseline or Logit Anchor LoRA checkpoint through the
+same recursive, image-only dataset and preprocessing pipeline:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
 python scripts/test_checkpoint.py \
   --dataroot ./CNN_synth_testset \
-  --checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --checkpoint ./c2p_checkpoints/c2p_anchor/model.pth \
   --clip_path ./clip-vit-large-patch14 \
   --batch_size 64 --gpu 0 --num_workers 4 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --predictions_csv ./baseline_cnn_synth_predictions.csv
+  --predictions_csv ./anchor_cnn_synth_predictions.csv
 ```
-
-Add the matched local-feature architecture flags for a local checkpoint:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
-python scripts/test_checkpoint.py \
-  --dataroot ./CNN_synth_testset \
-  --checkpoint ./c2p_checkpoints/local/model.pth \
-  --clip_path ./clip-vit-large-patch14 \
-  --batch_size 64 --gpu 0 --num_workers 4 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --use_local_features \
-  --local_layer 12 --local_dim 256 \
-  --local_dropout 0.1 --local_pool mean_std \
-  --local_fusion auto \
-  --predictions_csv ./local_cnn_synth_predictions.csv
-```
-
-Test a formally aligned bounded-residual checkpoint. The alpha and scale are
-restored from checkpoint buffers, so `--gate_override` is not used:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
-python scripts/test_checkpoint.py \
-  --dataroot ./CNN_synth_testset \
-  --checkpoint ./c2p_checkpoints/bounded/model.pth \
-  --clip_path ./clip-vit-large-patch14 \
-  --batch_size 64 --gpu 0 --num_workers 4 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --use_local_features \
-  --local_layer 12 --local_dim 256 \
-  --local_dropout 0.1 --local_pool mean_std \
-  --local_fusion auto \
-  --predictions_csv ./bounded_residual_cnn_synth_predictions.csv
-```
-
-`--local_fusion auto` detects legacy `concat`, scalar `residual_gate`,
-`adaptive_residual`, and `bounded_residual` checkpoints from their state-dict
-keys. An explicit
-mismatched fusion mode fails before strict state-dict loading.
 
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
-raw-logit class statistics, macro means, and overall metrics. Local-model CSVs
-contain `global_logit` and `local_logit`; bounded residual CSVs also contain
-`residual_logit`. Gated checkpoints additionally contain `gate`, and forced
-gate runs retain `learned_gate`. `gate_override` is not valid for bounded
-residual checkpoints.
+raw-logit class statistics, macro means, and overall metrics. Prediction CSVs
+contain the generator, image path, label, raw logit, and sigmoid score.
 
 ### Logit distribution analysis for self-trained LoRA checkpoints
 
-Baseline model on `my_first_test`:
+One model on `my_first_test`:
 
 ```bash
 python scripts/plot_logit_dist.py \
   --dataroot ./my_first_test \
-  --checkpoint ./c2p_checkpoints/baseline/model.pth \
+  --checkpoint ./c2p_checkpoints/c2p_anchor/model.pth \
   --clip_path ./clip-vit-large-patch14 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --save ./baseline_logit_distribution.png
+  --save ./anchor_logit_distribution.png
 ```
 
-Local-feature model on `my_first_test`:
-
-```bash
-python scripts/plot_logit_dist.py \
-  --dataroot ./my_first_test \
-  --checkpoint ./c2p_checkpoints/local/model.pth \
-  --clip_path ./clip-vit-large-patch14 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --use_local_features \
-  --local_layer 12 --local_dim 256 \
-  --local_dropout 0.1 --local_pool mean_std \
-  --local_fusion auto \
-  --save ./local_logit_distribution.png
-```
-
-Compare matched baseline and local-feature checkpoints with shared bins:
+Compare matched baseline and Logit Anchor checkpoints with shared bins:
 
 ```bash
 python scripts/plot_logit_dist.py \
   --dataroot ./my_first_test \
   --checkpoint ./c2p_checkpoints/baseline/model.pth \
   --checkpoint_label Baseline \
-  --compare_checkpoint ./c2p_checkpoints/local/model.pth \
-  --compare_label Local \
-  --compare_use_local_features \
+  --compare_checkpoint ./c2p_checkpoints/c2p_anchor/model.pth \
+  --compare_label LogitAnchor \
   --clip_path ./clip-vit-large-patch14 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --local_layer 12 --local_dim 256 \
-  --local_dropout 0.1 --local_pool mean_std \
-  --compare_local_fusion auto \
-  --save ./baseline_vs_local_logits.png
+  --save ./baseline_vs_anchor_logits.png
 ```
 
 

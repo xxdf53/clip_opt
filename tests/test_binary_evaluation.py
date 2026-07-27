@@ -50,7 +50,7 @@ class BinaryEvaluationTests(unittest.TestCase):
         diagnostics = format_diagnostics(metrics, logit_stats)
         self.assertIn('AUROC= 97.50%', diagnostics)
         self.assertIn('ECE= 12.25%', diagnostics)
-        self.assertIn('R=-1.000±0.500', diagnostics)
+        self.assertIn('R=-1.000+/-0.500', diagnostics)
 
     def test_group_dataset_returns_deterministic_paths_and_binary_labels(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -123,6 +123,20 @@ class BinaryEvaluationTests(unittest.TestCase):
             )
             self.assertEqual(summary['overall_logit_stats']['fake_std'], 0.5)
 
+    def test_evaluate_groups_rejects_non_tensor_model_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            make_binary_leaf(root / 'generator_a', 'a')
+
+            with self.assertRaisesRegex(TypeError, 'must return a tensor'):
+                evaluate_groups(
+                    {'generator_a': [root / 'generator_a']},
+                    forward_logits=lambda _images: {'final_logits': None},
+                    device=torch.device('cpu'),
+                    batch_size=2,
+                    num_workers=0,
+                )
+
     def test_write_predictions_csv_preserves_expected_fields(self):
         predictions = [{
             'generator': 'biggan',
@@ -146,40 +160,6 @@ class BinaryEvaluationTests(unittest.TestCase):
             self.assertEqual(rows[0]['generator'], 'biggan')
             self.assertEqual(rows[0]['label'], '0')
             self.assertEqual(rows[0]['raw_logit'], '-1.25')
-
-    def test_component_outputs_are_exported_without_changing_metrics(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            make_binary_leaf(root / 'generator_a', 'a')
-
-            def forward_components(images):
-                batch_size = images.shape[0]
-                return {
-                    'final_logits': torch.tensor([[-2.0], [2.0]])[:batch_size],
-                    'global_logits': torch.tensor([[-1.5], [1.5]])[:batch_size],
-                    'local_logits': torch.tensor([[-1.0], [1.0]])[:batch_size],
-                    'gate': torch.full((batch_size, 1), 0.5),
-                    'learned_gate': torch.full((batch_size, 1), 0.25),
-                }
-
-            summary = evaluate_groups(
-                {'generator_a': [root / 'generator_a']},
-                forward_logits=forward_components,
-                device=torch.device('cpu'),
-                batch_size=2,
-                num_workers=0,
-            )
-            output = Path(directory) / 'components.csv'
-            write_predictions_csv(summary['predictions'], output)
-
-            with output.open(newline='', encoding='utf-8') as csv_file:
-                rows = list(csv.DictReader(csv_file))
-
-            self.assertEqual(summary['overall_metrics']['acc'], 100.0)
-            self.assertEqual(rows[0]['global_logit'], '-1.5')
-            self.assertEqual(rows[0]['local_logit'], '-1.0')
-            self.assertEqual(rows[0]['gate'], '0.5')
-            self.assertEqual(rows[0]['learned_gate'], '0.25')
 
 
 if __name__ == '__main__':
