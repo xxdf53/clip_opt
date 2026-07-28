@@ -5,7 +5,7 @@ from types import MethodType, SimpleNamespace
 import torch
 import torch.nn as nn
 
-from networks.trainer import CLIPModel_lora
+from networks.trainer import CLIPModel_lora, Trainer
 
 
 class FakeVisionTower(nn.Module):
@@ -47,6 +47,28 @@ def build_minimal_model():
 
 
 class CounterfactualPromptModelTests(unittest.TestCase):
+    def test_trainer_activates_cpd_only_after_scheduled_start(self):
+        trainer = Trainer.__new__(Trainer)
+        trainer.total_steps = 400
+        trainer.cpd_start_step = 400
+        trainer.cpd_warmup_steps = 400
+        trainer.cpd_direction_weight = 0.5
+        trainer.cpd_content_weight = 0.1
+        trainer.cpd_enabled = True
+
+        trainer.update_cpd_schedule()
+
+        self.assertFalse(trainer.cpd_active)
+        self.assertEqual(trainer.effective_cpd_direction_weight, 0.0)
+
+        trainer.total_steps = 600
+        trainer.update_cpd_schedule()
+
+        self.assertTrue(trainer.cpd_active)
+        self.assertEqual(trainer.cpd_schedule_scale, 0.5)
+        self.assertEqual(trainer.effective_cpd_direction_weight, 0.25)
+        self.assertEqual(trainer.effective_cpd_content_weight, 0.05)
+
     def test_cpd_forward_returns_lora_residual_and_prompt_components(self):
         model = build_minimal_model()
         images = torch.tensor([[1.0, 0.0], [0.0, 1.0]])

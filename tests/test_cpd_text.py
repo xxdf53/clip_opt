@@ -12,6 +12,7 @@ from utils.cpd import (
     build_counterfactual_captions,
     build_label_caption,
     cpd_is_enabled,
+    cpd_schedule_scale,
 )
 
 
@@ -31,6 +32,25 @@ class FakeTokenizer:
 
 
 class CounterfactualPromptTextTests(unittest.TestCase):
+    def test_cpd_schedule_delays_and_linearly_warms_up(self):
+        self.assertEqual(cpd_schedule_scale(399, 400, 400), 0.0)
+        self.assertEqual(cpd_schedule_scale(400, 400, 400), 0.0)
+        self.assertEqual(cpd_schedule_scale(600, 400, 400), 0.5)
+        self.assertEqual(cpd_schedule_scale(800, 400, 400), 1.0)
+        self.assertEqual(cpd_schedule_scale(1200, 400, 400), 1.0)
+
+    def test_zero_warmup_preserves_fixed_weight_behavior(self):
+        self.assertEqual(cpd_schedule_scale(1, 0, 0), 1.0)
+        self.assertEqual(cpd_schedule_scale(401, 400, 0), 1.0)
+
+    def test_cpd_schedule_rejects_negative_values(self):
+        with self.assertRaises(ValueError):
+            cpd_schedule_scale(-1, 0, 0)
+        with self.assertRaises(ValueError):
+            cpd_schedule_scale(1, -1, 0)
+        with self.assertRaises(ValueError):
+            cpd_schedule_scale(1, 0, -1)
+
     def test_builds_real_then_fake_counterfactual_pair(self):
         real_text, fake_text = build_counterfactual_captions(
             'A cat on a chair.',

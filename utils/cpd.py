@@ -9,6 +9,21 @@ def cpd_is_enabled(opt):
     )
 
 
+def cpd_schedule_scale(step, start_step=0, warmup_steps=0):
+    """Return the CPD multiplier for a delayed linear warmup."""
+    if step < 0:
+        raise ValueError('CPD schedule step cannot be negative')
+    if start_step < 0:
+        raise ValueError('--cpd_start_step cannot be negative')
+    if warmup_steps < 0:
+        raise ValueError('--cpd_warmup_steps cannot be negative')
+    if step <= start_step:
+        return 0.0
+    if warmup_steps == 0:
+        return 1.0
+    return min((step - start_step) / warmup_steps, 1.0)
+
+
 def split_category_prompts(cates):
     """Return fake and real prompt strings using the C2P category convention."""
     if len(cates) < 2 or len(cates) % 2 != 0:

@@ -5,7 +5,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import CLIPModel
 
 from networks.base_model import BaseModel
-from utils.cpd import cpd_is_enabled
+from utils.cpd import cpd_is_enabled, cpd_schedule_scale
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
@@ -208,7 +208,13 @@ class Trainer(BaseModel):
         self.cpd_direction_weight = opt.cpd_direction_weight
         self.cpd_content_weight = opt.cpd_content_weight
         self.cpd_direction_margin = opt.cpd_direction_margin
+        self.cpd_start_step = opt.cpd_start_step
+        self.cpd_warmup_steps = opt.cpd_warmup_steps
         self.cpd_enabled = cpd_is_enabled(opt)
+        self.cpd_schedule_scale = 0.0
+        self.effective_cpd_direction_weight = 0.0
+        self.effective_cpd_content_weight = 0.0
+        self.cpd_active = False
 
         if self.anchor_loss_weight < 0:
             raise ValueError('--anchor_loss_weight cannot be negative')
@@ -220,6 +226,10 @@ class Trainer(BaseModel):
             raise ValueError('--cpd_content_weight cannot be negative')
         if self.cpd_direction_margin < 0:
             raise ValueError('--cpd_direction_margin cannot be negative')
+        if self.cpd_start_step < 0:
+            raise ValueError('--cpd_start_step cannot be negative')
+        if self.cpd_warmup_steps < 0:
+            raise ValueError('--cpd_warmup_steps cannot be negative')
 
         self.model = CLIPModel_lora(
             name=opt.clip,
@@ -328,9 +338,9 @@ class Trainer(BaseModel):
             cpd_input_ids=self.cpd_input_ids,
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
-            return_cpd=self.cpd_enabled,
+            return_cpd=self.cpd_active,
         )
-        if self.cpd_enabled:
+        if self.cpd_active:
             self.output, self.classhead, self.cpd_components = model_outputs
         else:
             self.output, self.classhead = model_outputs
@@ -343,7 +353,26 @@ class Trainer(BaseModel):
         image_loss = F.cross_entropy(logits.t(), targets)
         return (caption_loss + image_loss) / 2.0
 
+    def update_cpd_schedule(self):
+        self.cpd_schedule_scale = cpd_schedule_scale(
+            self.total_steps,
+            start_step=self.cpd_start_step,
+            warmup_steps=self.cpd_warmup_steps,
+        )
+        self.effective_cpd_direction_weight = (
+            self.cpd_direction_weight * self.cpd_schedule_scale)
+        self.effective_cpd_content_weight = (
+            self.cpd_content_weight * self.cpd_schedule_scale)
+        self.cpd_active = (
+            self.cpd_enabled
+            and (
+                self.effective_cpd_direction_weight > 0
+                or self.effective_cpd_content_weight > 0
+            )
+        )
+
     def optimize_parameters(self):
+        self.update_cpd_schedule()
         self.forward()
 
         device_logits = torch.split(
@@ -366,9 +395,9 @@ class Trainer(BaseModel):
             self.loss_anchor = self.classhead.new_zeros(())
 
         zero = self.classhead.new_zeros(())
-        if self.cpd_enabled:
+        if self.cpd_active:
             self.loss_cpd_direction = (
-                self.cpd_direction_weight
+                self.effective_cpd_direction_weight
                 * cpd_direction_loss(
                     self.cpd_components['image_residual'],
                     self.cpd_components['authenticity_direction'],
@@ -377,7 +406,7 @@ class Trainer(BaseModel):
                 )
             )
             self.loss_cpd_content = (
-                self.cpd_content_weight
+                self.effective_cpd_content_weight
                 * cpd_content_rejection_loss(
                     self.cpd_components['image_residual'],
                     self.cpd_components['content_center'],

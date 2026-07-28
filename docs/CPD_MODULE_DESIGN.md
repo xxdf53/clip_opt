@@ -77,6 +77,22 @@ L = L_contrastive
   + lambda_content * L_content
 ```
 
+## Delayed linear warmup
+
+Fixed CPD weights showed high variance across random seeds on held-out
+generators. The stability variant uses a training-step multiplier `r(k)`:
+
+```text
+r(k) = 0                                      if k <= start
+r(k) = min((k - start) / warmup, 1)          otherwise
+```
+
+Both CPD losses are multiplied by `r(k)`. With `start=400` and `warmup=400`,
+the original C2P, classification, and Logit Anchor objectives train alone
+through step 400; CPD then ramps to full strength at step 800. The paired text
+and extra frozen visual forward are skipped while the effective CPD weight is
+zero.
+
 ## Inference boundary
 
 Inference remains:

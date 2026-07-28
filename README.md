@@ -99,7 +99,10 @@ residual to follow the label-conditioned authenticity direction and optionally
 reject the shared content direction. The extra text pair and frozen visual
 forward are not used at inference, and CPD adds no checkpoint parameters.
 
-Run the direction-only falsification experiment first:
+The fixed-weight CPD pilot was seed-sensitive on held-out generators. The
+current stability experiment delays CPD until the base C2P and Logit Anchor
+objectives have formed a useful classifier, then linearly ramps CPD to its
+configured weight:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -109,26 +112,31 @@ python scripts/train.py \
   --classes car,cat,chair,horse \
   --clip ./clip-vit-large-patch14 \
   --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_slar_cpd_direction \
+  --name c2p_slar_cpd_warmup \
   --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
   --logit_anchor 3.0 --anchor_loss_weight 0.5 \
-  --cpd_direction_weight 1.0 \
+  --cpd_direction_weight 0.5 \
   --cpd_content_weight 0.0 \
-  --cpd_direction_margin 0.1
+  --cpd_direction_margin 0.1 \
+  --cpd_start_step 400 \
+  --cpd_warmup_steps 400
 ```
 
-Only if direction alignment improves held-out AP/AUROC should content rejection
-be enabled, initially with a small weight such as
-`--cpd_content_weight 0.1`. These values are starting points for an ablation,
-not validated optimal hyperparameters.
+This schedule keeps CPD off through step 400, ramps from zero to full strength
+over the next 400 steps, and uses weight 0.5 from step 800 onward. A zero start
+and zero warmup preserve the original fixed-weight behavior. Content rejection
+remains disabled until direction alignment improves held-out AP/AUROC across
+multiple seeds.
 
 Training logs additionally report:
 
 - `cpd_direction`: weighted direction loss;
 - `cpd_content`: weighted content-rejection loss;
+- `cpd_scale`: current delayed-warmup multiplier;
+- `cpd_direction_weight`: current effective direction weight;
 - `cpd_projection`: mean label-signed residual projection;
 - `cpd_content_align`: mean absolute content alignment;
 - `cpd_prompt_gap`: distance between the paired real/fake text embeddings.

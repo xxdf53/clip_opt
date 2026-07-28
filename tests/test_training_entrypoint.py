@@ -33,6 +33,8 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss_anchor=value,
             loss_cpd_direction=value,
             loss_cpd_content=value,
+            cpd_schedule_scale=0.5,
+            effective_cpd_direction_weight=0.25,
             cpd_signed_projection=value,
             cpd_content_alignment=value,
             cpd_prompt_gap=value,
@@ -48,6 +50,8 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('anchor=1.250000', text)
         self.assertIn('cpd_direction=1.250000', text)
         self.assertIn('cpd_content=1.250000', text)
+        self.assertIn('cpd_scale=0.500000', text)
+        self.assertIn('cpd_direction_weight=0.250000', text)
         self.assertIn('cpd_projection=1.250000', text)
         self.assertNotIn('rank=', text)
 

@@ -30,17 +30,23 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.cpd_direction_weight, 0.0)
         self.assertEqual(args.cpd_content_weight, 0.0)
         self.assertEqual(args.cpd_direction_margin, 0.1)
+        self.assertEqual(args.cpd_start_step, 0)
+        self.assertEqual(args.cpd_warmup_steps, 0)
 
     def test_accepts_cpd_options(self):
         args = self.parse([
             '--cpd_direction_weight', '1.0',
             '--cpd_content_weight', '0.1',
             '--cpd_direction_margin', '0.2',
+            '--cpd_start_step', '400',
+            '--cpd_warmup_steps', '400',
         ])
 
         self.assertEqual(args.cpd_direction_weight, 1.0)
         self.assertEqual(args.cpd_content_weight, 0.1)
         self.assertEqual(args.cpd_direction_margin, 0.2)
+        self.assertEqual(args.cpd_start_step, 400)
+        self.assertEqual(args.cpd_warmup_steps, 400)
 
     def test_compact_name_records_active_anchor_configuration(self):
         args = self.parse([
@@ -81,6 +87,19 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260728-120000')
 
         self.assertTrue(name.endswith('__cpd-d1.0-c0.1-m0.2'))
+
+    def test_compact_name_records_active_cpd_schedule(self):
+        args = self.parse([
+            '--name', 'c2p_cpd_warmup',
+            '--cpd_direction_weight', '0.5',
+            '--cpd_start_step', '400',
+            '--cpd_warmup_steps', '400',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260728-130000')
+
+        self.assertTrue(
+            name.endswith('__cpd-d0.5-c0.0-m0.1-s400-w400'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse([

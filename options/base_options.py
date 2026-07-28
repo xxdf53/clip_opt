@@ -41,10 +41,15 @@ def build_experiment_name(opt, timestamp=None):
         opt.cpd_direction_weight > 0
         or opt.cpd_content_weight > 0
     ):
-        configuration_parts.append(
+        cpd_configuration = (
             f'cpd-d{opt.cpd_direction_weight}-'
             f'c{opt.cpd_content_weight}-'
-            f'm{opt.cpd_direction_margin}')
+            f'm{opt.cpd_direction_margin}'
+        )
+        if opt.cpd_start_step > 0 or opt.cpd_warmup_steps > 0:
+            cpd_configuration += (
+                f'-s{opt.cpd_start_step}-w{opt.cpd_warmup_steps}')
+        configuration_parts.append(cpd_configuration)
 
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -113,6 +118,10 @@ class BaseOptions:
                             help='weight of content rejection on the LoRA feature residual')
         parser.add_argument('--cpd_direction_margin', type=float, default=0.1,
                             help='minimum signed projection encouraged by CPD')
+        parser.add_argument('--cpd_start_step', type=int, default=0,
+                            help='optimizer step through which CPD stays disabled')
+        parser.add_argument('--cpd_warmup_steps', type=int, default=0,
+                            help='steps used to linearly ramp CPD to its configured weight')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True
