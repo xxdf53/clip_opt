@@ -5,7 +5,12 @@ from peft import LoraConfig, get_peft_model
 from transformers import CLIPModel
 
 from networks.base_model import BaseModel
+from utils.cpd import cpd_is_enabled
 from utils.training_objectives import (
+    counterfactual_prompt_components,
+    cpd_content_rejection_loss,
+    cpd_diagnostics,
+    cpd_direction_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -58,33 +63,136 @@ class CLIPModel_lora(nn.Module):
         )
         return self.model.text_projection(text_outputs.pooler_output)
 
-    def encode_image(self, images):
-        vision_outputs = self.vision_tower_lora(
-            pixel_values=images,
-            output_attentions=self.model.config.output_attentions,
-            output_hidden_states=False,
-            return_dict=True,
-        )
+    def encode_image(self, images, disable_lora=False):
+        def run_vision_tower():
+            return self.vision_tower_lora(
+                pixel_values=images,
+                output_attentions=self.model.config.output_attentions,
+                output_hidden_states=False,
+                return_dict=True,
+            )
+
+        if disable_lora:
+            with self.vision_tower_lora.disable_adapter():
+                vision_outputs = run_vision_tower()
+        else:
+            vision_outputs = run_vision_tower()
         return self.model.visual_projection(vision_outputs.pooler_output)
 
-    def forward(self, images, input_ids=None, attention_mask=None, cla=False):
+    def _encode_counterfactual_prompts(
+        self,
+        input_ids,
+        attention_mask,
+    ):
+        if input_ids.ndim != 3 or input_ids.shape[1] != 2:
+            raise ValueError(
+                'CPD input_ids must have shape [batch, 2, sequence]')
+        if attention_mask.shape != input_ids.shape:
+            raise ValueError(
+                'CPD attention_mask must match counterfactual input_ids')
+
+        batch_size, prompt_count, sequence_length = input_ids.shape
+        flat_input_ids = input_ids.reshape(
+            batch_size * prompt_count, sequence_length)
+        flat_attention_mask = attention_mask.reshape(
+            batch_size * prompt_count, sequence_length)
+        text_embeddings = F.normalize(
+            self.encode_text(flat_input_ids, flat_attention_mask),
+            p=2,
+            dim=-1,
+        ).reshape(batch_size, prompt_count, -1)
+        real_text_embeddings = text_embeddings[:, 0]
+        fake_text_embeddings = text_embeddings[:, 1]
+        authenticity_direction, content_center = (
+            counterfactual_prompt_components(
+                real_text_embeddings,
+                fake_text_embeddings,
+            )
+        )
+        prompt_gap = (
+            fake_text_embeddings - real_text_embeddings
+        ).norm(p=2, dim=-1)
+        return (
+            text_embeddings,
+            authenticity_direction,
+            content_center,
+            prompt_gap,
+        )
+
+    def forward(
+        self,
+        images,
+        input_ids=None,
+        attention_mask=None,
+        cla=False,
+        cpd_input_ids=None,
+        cpd_attention_mask=None,
+        labels=None,
+        return_cpd=False,
+    ):
         image_embeddings = F.normalize(
             self.encode_image(images), p=2, dim=-1)
         class_logits = self.model.fc(image_embeddings)
         if cla:
             return class_logits
 
-        if input_ids is None or attention_mask is None:
-            raise ValueError(
-                'input_ids and attention_mask are required during training')
+        cpd_components = None
+        if return_cpd:
+            if (
+                cpd_input_ids is None
+                or cpd_attention_mask is None
+                or labels is None
+            ):
+                raise ValueError(
+                    'counterfactual prompts and labels are required for CPD')
+            (
+                paired_text_embeddings,
+                authenticity_direction,
+                content_center,
+                prompt_gap,
+            ) = self._encode_counterfactual_prompts(
+                cpd_input_ids,
+                cpd_attention_mask,
+            )
+            label_indices = labels.flatten().long()
+            if label_indices.numel() != image_embeddings.shape[0]:
+                raise ValueError('CPD labels must match the image batch')
+            text_embeddings = paired_text_embeddings[
+                torch.arange(
+                    image_embeddings.shape[0],
+                    device=image_embeddings.device,
+                ),
+                label_indices,
+            ]
+            with torch.no_grad():
+                base_image_embeddings = F.normalize(
+                    self.encode_image(images, disable_lora=True),
+                    p=2,
+                    dim=-1,
+                )
+            cpd_components = {
+                'image_residual': (
+                    image_embeddings - base_image_embeddings
+                ),
+                'authenticity_direction': authenticity_direction,
+                'content_center': content_center,
+                'prompt_gap': prompt_gap,
+            }
+        else:
+            if input_ids is None or attention_mask is None:
+                raise ValueError(
+                    'input_ids and attention_mask are required during training')
+            text_embeddings = F.normalize(
+                self.encode_text(input_ids, attention_mask), p=2, dim=-1)
 
-        text_embeddings = F.normalize(
-            self.encode_text(input_ids, attention_mask), p=2, dim=-1)
         logits_per_text = (
             text_embeddings @ image_embeddings.t()
             * self.model.logit_scale.exp()
         )
-        return logits_per_text.t(), class_logits.squeeze(1)
+        outputs = (logits_per_text.t(), class_logits.squeeze(1))
+        if return_cpd:
+            return outputs + (cpd_components,)
+        return outputs
 
 
 class Trainer(BaseModel):
@@ -97,11 +205,21 @@ class Trainer(BaseModel):
         self.claloss = opt.claloss
         self.anchor_loss_weight = opt.anchor_loss_weight
         self.logit_anchor = opt.logit_anchor
+        self.cpd_direction_weight = opt.cpd_direction_weight
+        self.cpd_content_weight = opt.cpd_content_weight
+        self.cpd_direction_margin = opt.cpd_direction_margin
+        self.cpd_enabled = cpd_is_enabled(opt)
 
         if self.anchor_loss_weight < 0:
             raise ValueError('--anchor_loss_weight cannot be negative')
         if self.logit_anchor <= 0:
             raise ValueError('--logit_anchor must be positive')
+        if self.cpd_direction_weight < 0:
+            raise ValueError('--cpd_direction_weight cannot be negative')
+        if self.cpd_content_weight < 0:
+            raise ValueError('--cpd_content_weight cannot be negative')
+        if self.cpd_direction_margin < 0:
+            raise ValueError('--cpd_direction_margin cannot be negative')
 
         self.model = CLIPModel_lora(
             name=opt.clip,
@@ -180,16 +298,43 @@ class Trainer(BaseModel):
 
     def set_input(self, batch):
         self.input = batch[1].cuda()
-        self.input_ids = self._to_cuda(batch[3])
-        self.attention_mask = self._to_cuda(batch[4])
         self.label = batch[5].cuda().float()
+        token_ids = self._to_cuda(batch[3])
+        token_attention_mask = self._to_cuda(batch[4])
+        if self.cpd_enabled:
+            if token_ids.ndim != 3 or token_ids.shape[1] != 2:
+                raise ValueError(
+                    'CPD training requires real/fake prompt pairs from '
+                    'the training dataset')
+            self.cpd_input_ids = token_ids
+            self.cpd_attention_mask = token_attention_mask
+            label_indices = self.label.long()
+            batch_indices = torch.arange(
+                self.label.shape[0], device=self.label.device)
+            self.input_ids = token_ids[batch_indices, label_indices]
+            self.attention_mask = token_attention_mask[
+                batch_indices, label_indices]
+        else:
+            self.input_ids = token_ids
+            self.attention_mask = token_attention_mask
+            self.cpd_input_ids = None
+            self.cpd_attention_mask = None
 
     def forward(self):
-        self.output, self.classhead = self.model(
+        model_outputs = self.model(
             self.input,
             self.input_ids,
             self.attention_mask,
+            cpd_input_ids=self.cpd_input_ids,
+            cpd_attention_mask=self.cpd_attention_mask,
+            labels=self.label,
+            return_cpd=self.cpd_enabled,
         )
+        if self.cpd_enabled:
+            self.output, self.classhead, self.cpd_components = model_outputs
+        else:
+            self.output, self.classhead = model_outputs
+            self.cpd_components = None
 
     @staticmethod
     def contrastive_loss(logits):
@@ -220,6 +365,42 @@ class Trainer(BaseModel):
         else:
             self.loss_anchor = self.classhead.new_zeros(())
 
+        zero = self.classhead.new_zeros(())
+        if self.cpd_enabled:
+            self.loss_cpd_direction = (
+                self.cpd_direction_weight
+                * cpd_direction_loss(
+                    self.cpd_components['image_residual'],
+                    self.cpd_components['authenticity_direction'],
+                    self.label,
+                    margin=self.cpd_direction_margin,
+                )
+            )
+            self.loss_cpd_content = (
+                self.cpd_content_weight
+                * cpd_content_rejection_loss(
+                    self.cpd_components['image_residual'],
+                    self.cpd_components['content_center'],
+                )
+            )
+            cpd_observables = cpd_diagnostics(
+                self.cpd_components['image_residual'],
+                self.cpd_components['authenticity_direction'],
+                self.cpd_components['content_center'],
+                self.label,
+                self.cpd_components['prompt_gap'],
+            )
+        else:
+            self.loss_cpd_direction = zero
+            self.loss_cpd_content = zero
+            cpd_observables = {
+                'cpd_signed_projection': zero,
+                'cpd_content_alignment': zero,
+                'cpd_prompt_gap': zero,
+            }
+        for name, value in cpd_observables.items():
+            setattr(self, name, value)
+
         diagnostics = symmetric_logit_anchor_diagnostics(
             self.classhead,
             self.label,
@@ -232,6 +413,8 @@ class Trainer(BaseModel):
             self.loss_contrastive
             + self.loss_classification
             + self.loss_anchor
+            + self.loss_cpd_direction
+            + self.loss_cpd_content
         )
         self.optimizer.zero_grad()
         self.loss.backward()

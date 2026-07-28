@@ -31,6 +31,11 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss_contrastive=value,
             loss_classification=value,
             loss_anchor=value,
+            loss_cpd_direction=value,
+            loss_cpd_content=value,
+            cpd_signed_projection=value,
+            cpd_content_alignment=value,
+            cpd_prompt_gap=value,
             real_logit_mean=value,
             fake_logit_mean=value,
             real_anchor_deviation=value,
@@ -41,6 +46,9 @@ class TrainingEntrypointTests(unittest.TestCase):
 
         self.assertIn('contrastive=1.250000', text)
         self.assertIn('anchor=1.250000', text)
+        self.assertIn('cpd_direction=1.250000', text)
+        self.assertIn('cpd_content=1.250000', text)
+        self.assertIn('cpd_projection=1.250000', text)
         self.assertNotIn('rank=', text)
 
 

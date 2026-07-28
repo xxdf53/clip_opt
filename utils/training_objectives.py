@@ -2,6 +2,103 @@ import torch
 import torch.nn.functional as F
 
 
+def _validate_feature_pair(first, second, names):
+    if first.ndim != 2 or second.ndim != 2:
+        raise ValueError(f'{names} must both have shape [batch, features]')
+    if first.shape != second.shape:
+        raise ValueError(f'{names} must have identical shapes')
+
+
+def counterfactual_prompt_components(
+    real_text_embeddings,
+    fake_text_embeddings,
+):
+    """Split paired prompts into authenticity direction and content center."""
+    _validate_feature_pair(
+        real_text_embeddings,
+        fake_text_embeddings,
+        'real/fake text embeddings',
+    )
+    real_text_embeddings = F.normalize(
+        real_text_embeddings, p=2, dim=-1)
+    fake_text_embeddings = F.normalize(
+        fake_text_embeddings, p=2, dim=-1)
+    authenticity_direction = F.normalize(
+        fake_text_embeddings - real_text_embeddings,
+        p=2,
+        dim=-1,
+    )
+    content_center = F.normalize(
+        0.5 * (fake_text_embeddings + real_text_embeddings),
+        p=2,
+        dim=-1,
+    )
+    return authenticity_direction, content_center
+
+
+def cpd_direction_loss(
+    image_residual,
+    authenticity_direction,
+    labels,
+    margin=0.1,
+):
+    """Push the LoRA residual along the label-conditioned prompt direction."""
+    if margin < 0:
+        raise ValueError(f'CPD direction margin cannot be negative: {margin}')
+    _validate_feature_pair(
+        image_residual,
+        authenticity_direction,
+        'image residual/authenticity direction',
+    )
+    labels = labels.flatten().to(dtype=image_residual.dtype)
+    if labels.numel() != image_residual.shape[0]:
+        raise ValueError('labels must contain one value per image residual')
+    label_sign = labels.mul(2.0).sub(1.0)
+    projection = (
+        image_residual * authenticity_direction.detach()
+    ).sum(dim=-1)
+    signed_projection = label_sign * projection
+    return F.softplus(margin - signed_projection).mean()
+
+
+def cpd_content_rejection_loss(image_residual, content_center):
+    """Discourage the task-specific LoRA residual from following content."""
+    _validate_feature_pair(
+        image_residual,
+        content_center,
+        'image residual/content center',
+    )
+    alignment = (
+        image_residual * content_center.detach()
+    ).sum(dim=-1)
+    return alignment.square().mean()
+
+
+def cpd_diagnostics(
+    image_residual,
+    authenticity_direction,
+    content_center,
+    labels,
+    prompt_gap,
+):
+    """Return detached observables needed to falsify CPD's mechanism."""
+    labels = labels.flatten().to(dtype=image_residual.dtype)
+    label_sign = labels.mul(2.0).sub(1.0)
+    projection = (
+        image_residual.detach() * authenticity_direction.detach()
+    ).sum(dim=-1)
+    content_alignment = (
+        image_residual.detach() * content_center.detach()
+    ).sum(dim=-1).abs()
+    return {
+        'cpd_signed_projection': (
+            label_sign * projection
+        ).mean(),
+        'cpd_content_alignment': content_alignment.mean(),
+        'cpd_prompt_gap': prompt_gap.detach().flatten().mean(),
+    }
+
+
 def _flatten_binary_inputs(logits, labels):
     logits = logits.flatten()
     labels = labels.flatten().to(dtype=logits.dtype)

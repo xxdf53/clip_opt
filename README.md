@@ -78,9 +78,60 @@ the active anchor weight/target. The full configuration remains available in
 each directory's `opt.txt`.
 
 The active implementation intentionally contains only the original global
-C2P-CLIP/LoRA architecture and the Logit Anchor objective. Retired local
-feature, residual gate, ranking-loss, and frozen-branch experiments remain
-recoverable from Git history but are not supported by the current CLI.
+C2P-CLIP/LoRA architecture, the Logit Anchor objective, and an optional
+training-only Counterfactual Prompt Decomposition (CPD) objective. Retired
+local-feature, residual gate, ranking-loss, and frozen-branch experiments
+remain recoverable from Git history but are not supported by the current CLI.
+
+#### Counterfactual Prompt Decomposition (experimental)
+
+CPD constructs two texts from the same caption in binary-label order:
+
+```text
+Camera. <caption> Camera.
+Deepfake. <caption> Deepfake.
+```
+
+Their difference defines a content-conditioned authenticity direction, while
+their mean defines the shared content center. During training only, the image
+is also encoded once with LoRA disabled. CPD encourages the LoRA feature
+residual to follow the label-conditioned authenticity direction and optionally
+reject the shared content direction. The extra text pair and frozen visual
+forward are not used at inference, and CPD adds no checkpoint parameters.
+
+Run the direction-only falsification experiment first:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
+python scripts/train.py \
+  --dataroot ./ForenSynths_train_val_19test \
+  --textroot ./prefix_caption \
+  --classes car,cat,chair,horse \
+  --clip ./clip-vit-large-patch14 \
+  --checkpoints_dir ./c2p_checkpoints \
+  --name c2p_slar_cpd_direction \
+  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
+  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
+  --delr 0.9 --delr_freq 10 \
+  --logit_anchor 3.0 --anchor_loss_weight 0.5 \
+  --cpd_direction_weight 1.0 \
+  --cpd_content_weight 0.0 \
+  --cpd_direction_margin 0.1
+```
+
+Only if direction alignment improves held-out AP/AUROC should content rejection
+be enabled, initially with a small weight such as
+`--cpd_content_weight 0.1`. These values are starting points for an ablation,
+not validated optimal hyperparameters.
+
+Training logs additionally report:
+
+- `cpd_direction`: weighted direction loss;
+- `cpd_content`: weighted content-rejection loss;
+- `cpd_projection`: mean label-signed residual projection;
+- `cpd_content_align`: mean absolute content alignment;
+- `cpd_prompt_gap`: distance between the paired real/fake text embeddings.
 
 ### 2) Inference / Testing
 

@@ -13,6 +13,12 @@ from typing import Any, Callable, cast, Dict, List, Optional, Tuple
 import os
 from transformers import AutoTokenizer
 
+from utils.cpd import (
+    build_counterfactual_captions,
+    build_label_caption,
+    cpd_is_enabled,
+)
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
 
@@ -66,21 +72,39 @@ class ImageFolder2(datasets.DatasetFolder):
         if self.opt.isTrain and getattr(self.opt, 'data_aug', False):
             sample = data_augment(sample, self.opt)
         try:
-            with open(textpath, 'r') as file:
-                text = file.read()
-            cates_len = len(self.opt.cates)//2
-            if target == 1: text = f'{" ".join(self.opt.cates[:cates_len])}. {text} {" ".join(self.opt.cates[:cates_len])}.'
-            if target == 0: text = f'{" ".join(self.opt.cates[cates_len:])}. {text} {" ".join(self.opt.cates[cates_len:])}.'
-            tokenizer = _get_tokenizer(self.opt.clip)
-            inputs = tokenizer([text], padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt")
-            input_ids=inputs['input_ids'][0]
-            attention_mask=inputs['attention_mask'][0]
-        except:
+            with open(textpath, 'r', encoding='utf-8') as file:
+                caption = file.read()
+            caption_available = True
+        except (OSError, UnicodeError):
+            caption = ' '
+            caption_available = False
+
+        if self.opt.isTrain and cpd_is_enabled(self.opt):
+            text = build_label_caption(caption, self.opt.cates, target)
+            token_texts = list(build_counterfactual_captions(
+                caption, self.opt.cates))
+        elif caption_available:
+            text = build_label_caption(caption, self.opt.cates, target)
+            token_texts = [text]
+        else:
+            # Preserve the original baseline behavior when a caption file
+            # cannot be read.
             text = ' '
-            tokenizer = _get_tokenizer(self.opt.clip)
-            inputs = tokenizer([text], padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt")
-            input_ids=inputs['input_ids'][0]
-            attention_mask=inputs['attention_mask'][0]
+            token_texts = [text]
+
+        tokenizer = _get_tokenizer(self.opt.clip)
+        inputs = tokenizer(
+            token_texts,
+            padding='max_length',
+            max_length=tokenizer.model_max_length,
+            truncation=True,
+            return_tensors='pt',
+        )
+        input_ids = inputs['input_ids']
+        attention_mask = inputs['attention_mask']
+        if len(token_texts) == 1:
+            input_ids = input_ids[0]
+            attention_mask = attention_mask[0]
 
         if self.transform is not None:
             sample = self.transform(sample)

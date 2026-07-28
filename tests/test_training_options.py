@@ -24,6 +24,24 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.anchor_loss_weight, 0.5)
         self.assertEqual(args.logit_anchor, 3.5)
 
+    def test_cpd_defaults_to_disabled(self):
+        args = self.parse([])
+
+        self.assertEqual(args.cpd_direction_weight, 0.0)
+        self.assertEqual(args.cpd_content_weight, 0.0)
+        self.assertEqual(args.cpd_direction_margin, 0.1)
+
+    def test_accepts_cpd_options(self):
+        args = self.parse([
+            '--cpd_direction_weight', '1.0',
+            '--cpd_content_weight', '0.1',
+            '--cpd_direction_margin', '0.2',
+        ])
+
+        self.assertEqual(args.cpd_direction_weight, 1.0)
+        self.assertEqual(args.cpd_content_weight, 0.1)
+        self.assertEqual(args.cpd_direction_margin, 0.2)
+
     def test_compact_name_records_active_anchor_configuration(self):
         args = self.parse([
             '--name', 'c2p_anchor',
@@ -51,6 +69,18 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260727-120000')
 
         self.assertNotIn('anchor-', name)
+
+    def test_compact_name_records_active_cpd_configuration(self):
+        args = self.parse([
+            '--name', 'c2p_cpd',
+            '--cpd_direction_weight', '1.0',
+            '--cpd_content_weight', '0.1',
+            '--cpd_direction_margin', '0.2',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260728-120000')
+
+        self.assertTrue(name.endswith('__cpd-d1.0-c0.1-m0.2'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse([

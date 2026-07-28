@@ -37,6 +37,14 @@ def build_experiment_name(opt, timestamp=None):
     if opt.anchor_loss_weight > 0:
         configuration_parts.append(
             f'anchor-w{opt.anchor_loss_weight}-t{opt.logit_anchor}')
+    if (
+        opt.cpd_direction_weight > 0
+        or opt.cpd_content_weight > 0
+    ):
+        configuration_parts.append(
+            f'cpd-d{opt.cpd_direction_weight}-'
+            f'c{opt.cpd_content_weight}-'
+            f'm{opt.cpd_direction_margin}')
 
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -99,6 +107,12 @@ class BaseOptions:
                             help='weight of the symmetric logit anchor loss')
         parser.add_argument('--logit_anchor', type=float, default=3.0,
                             help='absolute real/fake target for logit anchoring')
+        parser.add_argument('--cpd_direction_weight', type=float, default=0.0,
+                            help='weight of counterfactual prompt direction alignment')
+        parser.add_argument('--cpd_content_weight', type=float, default=0.0,
+                            help='weight of content rejection on the LoRA feature residual')
+        parser.add_argument('--cpd_direction_margin', type=float, default=0.1,
+                            help='minimum signed projection encouraged by CPD')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True

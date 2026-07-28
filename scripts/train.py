@@ -1,4 +1,4 @@
-"""Train C2P-CLIP with LoRA and optional symmetric Logit Anchor loss."""
+"""Train C2P-CLIP with optional Logit Anchor and CPD objectives."""
 
 import os
 import random
@@ -73,6 +73,11 @@ def format_training_losses(model):
         f'contrastive={model.loss_contrastive.item():.6f} '
         f'classification={model.loss_classification.item():.6f} '
         f'anchor={model.loss_anchor.item():.6f} '
+        f'cpd_direction={model.loss_cpd_direction.item():.6f} '
+        f'cpd_content={model.loss_cpd_content.item():.6f} '
+        f'cpd_projection={model.cpd_signed_projection.item():.6f} '
+        f'cpd_content_align={model.cpd_content_alignment.item():.6f} '
+        f'cpd_prompt_gap={model.cpd_prompt_gap.item():.6f} '
         f'logit_real={model.real_logit_mean.item():.6f} '
         f'logit_fake={model.fake_logit_mean.item():.6f} '
         f'anchor_err_real={model.real_anchor_deviation.item():.6f} '
