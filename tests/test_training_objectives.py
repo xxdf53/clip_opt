@@ -9,6 +9,7 @@ from utils.training_objectives import (
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
     symmetric_logit_center_loss,
+    worst_group_bce_loss,
 )
 
 
@@ -144,6 +145,35 @@ class TrainingObjectiveTests(unittest.TestCase):
 
         self.assertEqual(loss.item(), 0.0)
         self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
+
+    def test_worst_group_bce_selects_the_largest_group_mean(self):
+        logits = torch.tensor([4.0, -4.0, 0.0, 0.0])
+        labels = torch.tensor([1.0, 1.0, 0.0, 1.0])
+        groups = torch.tensor([0, 0, 1, 2])
+
+        worst, group_losses = worst_group_bce_loss(
+            logits, labels, groups)
+
+        self.assertEqual(worst.item(), group_losses[0].item())
+        self.assertGreater(group_losses[0].item(), group_losses[1].item())
+
+    def test_worst_group_bce_ignores_an_absent_group(self):
+        worst, group_losses = worst_group_bce_loss(
+            torch.tensor([0.0, 0.0]),
+            torch.tensor([0.0, 1.0]),
+            torch.tensor([0, 2]),
+        )
+
+        self.assertTrue(torch.isnan(group_losses[1]))
+        self.assertTrue(torch.isfinite(worst))
+
+    def test_worst_group_bce_rejects_invalid_groups(self):
+        with self.assertRaisesRegex(ValueError, 'out-of-range'):
+            worst_group_bce_loss(
+                torch.tensor([0.0]),
+                torch.tensor([0.0]),
+                torch.tensor([3]),
+            )
 
     def test_anchor_diagnostics_report_class_means_and_deviations(self):
         diagnostics = symmetric_logit_anchor_diagnostics(

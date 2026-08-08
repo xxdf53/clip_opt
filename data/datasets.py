@@ -3,7 +3,7 @@ import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
-from random import random, choice
+from random import choice, random, randrange
 from io import BytesIO
 from PIL import Image
 from PIL import ImageFile
@@ -23,6 +23,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
 
 _tokenizer_cache = {}
+AUGMENTATION_GROUP_NAMES = ('clean', 'jpeg', 'blur')
 
 def _get_tokenizer(clip_path):
     if clip_path not in _tokenizer_cache:
@@ -69,7 +70,15 @@ class ImageFolder2(datasets.DatasetFolder):
         textpath = os.path.splitext(textpath)[0] + '.txt'
 
         sample = self.loader(path)
-        if self.opt.isTrain and getattr(self.opt, 'data_aug', False):
+        augmentation_group = None
+        if (
+            self.opt.isTrain
+            and getattr(self.opt, 'augmentation_dro_weight', 0.0) > 0
+        ):
+            augmentation_group = randrange(len(AUGMENTATION_GROUP_NAMES))
+            sample = apply_augmentation_group(
+                sample, self.opt, augmentation_group)
+        elif self.opt.isTrain and getattr(self.opt, 'data_aug', False):
             sample = data_augment(sample, self.opt)
         try:
             with open(textpath, 'r', encoding='utf-8') as file:
@@ -111,7 +120,10 @@ class ImageFolder2(datasets.DatasetFolder):
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return path, sample, text, input_ids, attention_mask, target
+        result = (path, sample, text, input_ids, attention_mask, target)
+        if augmentation_group is not None:
+            result += (augmentation_group,)
+        return result
 
         
 def dataset_folder(opt, root):
@@ -201,6 +213,24 @@ def data_augment(img, opt):
         qual = sample_discrete(opt.jpg_qual)
         img = jpeg_from_key(img, qual, method)
 
+    return Image.fromarray(img)
+
+
+def apply_augmentation_group(img, opt, group):
+    """Apply one explicit pseudo-domain transform for augmentation DRO."""
+    if group == 0:
+        return img
+
+    img = np.array(img)
+    if group == 1:
+        method = sample_discrete(opt.jpg_method)
+        quality = sample_discrete(opt.jpg_qual)
+        img = jpeg_from_key(img, quality, method)
+    elif group == 2:
+        sigma = sample_continuous(opt.blur_sig)
+        gaussian_blur(img, sigma)
+    else:
+        raise ValueError(f'unknown augmentation group: {group}')
     return Image.fromarray(img)
 
 

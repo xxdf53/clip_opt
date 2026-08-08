@@ -32,6 +32,9 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss_classification=value,
             loss_anchor=value,
             loss_logit_center=value,
+            loss_augmentation_dro=value,
+            augmentation_group_losses=[value, value, value],
+            worst_augmentation_group=SimpleNamespace(item=lambda: 2),
             loss_cpd_direction=value,
             loss_cpd_content=value,
             cpd_schedule_scale=0.5,
@@ -52,6 +55,9 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('anchor=1.250000', text)
         self.assertIn('logit_center=1.250000', text)
         self.assertIn('logit_midpoint=1.250000', text)
+        self.assertIn('augmentation_dro=1.250000', text)
+        self.assertIn('clean_bce=1.250000', text)
+        self.assertIn('worst_group=2', text)
         self.assertIn('cpd_direction=1.250000', text)
         self.assertIn('cpd_content=1.250000', text)
         self.assertIn('cpd_scale=0.500000', text)

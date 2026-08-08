@@ -79,7 +79,7 @@ def get_bal_sampler(dataset):
 
 
 def collate(batch):
-    return (
+    collated = (
         [item[0] for item in batch],
         torch.stack([item[1] for item in batch]),
         [item[2] for item in batch],
@@ -87,6 +87,9 @@ def collate(batch):
         torch.stack([item[4] for item in batch]),
         torch.tensor([item[5] for item in batch]),
     )
+    if len(batch[0]) == 7:
+        collated += (torch.tensor([item[6] for item in batch]),)
+    return collated
 
 
 def create_dataloader(opt):

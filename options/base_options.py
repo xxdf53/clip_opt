@@ -43,6 +43,9 @@ def build_experiment_name(opt, timestamp=None):
     if opt.logit_center_loss_weight > 0:
         configuration_parts.append(
             f'center-w{opt.logit_center_loss_weight}')
+    if opt.augmentation_dro_weight > 0:
+        configuration_parts.append(
+            f'agdro-w{opt.augmentation_dro_weight}')
     if (
         opt.cpd_direction_weight > 0
         or opt.cpd_content_weight > 0
@@ -141,6 +144,12 @@ class BaseOptions:
             type=float,
             default=0.0,
             help='weight of symmetric real/fake mean logit centering',
+        )
+        parser.add_argument(
+            '--augmentation_dro_weight',
+            type=float,
+            default=0.0,
+            help='weight of worst clean/JPEG/blur group classification loss',
         )
         parser.add_argument('--cpd_direction_weight', type=float, default=0.0,
                             help='weight of counterfactual prompt direction alignment')

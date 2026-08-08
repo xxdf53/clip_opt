@@ -129,6 +129,33 @@ def symmetric_logit_center_loss(logits, labels):
     return F.smooth_l1_loss(midpoint, torch.zeros_like(midpoint))
 
 
+def worst_group_bce_loss(logits, labels, groups, group_count=3):
+    """Return the largest present-group BCE and every group mean."""
+    if group_count <= 0:
+        raise ValueError('group_count must be positive')
+    logits, labels = _flatten_binary_inputs(logits, labels)
+    groups = groups.flatten().to(device=logits.device, dtype=torch.long)
+    if groups.numel() != logits.numel():
+        raise ValueError('groups must contain one value per logit')
+    if torch.any((groups < 0) | (groups >= group_count)):
+        raise ValueError('groups contain an out-of-range index')
+
+    sample_losses = F.binary_cross_entropy_with_logits(
+        logits, labels, reduction='none')
+    group_losses = []
+    present_losses = []
+    for group in range(group_count):
+        mask = groups == group
+        if mask.any():
+            group_loss = sample_losses[mask].mean()
+            present_losses.append(group_loss)
+        else:
+            group_loss = logits.new_tensor(float('nan'))
+        group_losses.append(group_loss)
+
+    return torch.stack(present_losses).max(), torch.stack(group_losses)
+
+
 def symmetric_logit_anchor_diagnostics(logits, labels, anchor=3.0):
     """Return detached real/fake means and deviations from their anchors."""
     if anchor <= 0:

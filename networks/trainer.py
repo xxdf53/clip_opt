@@ -14,6 +14,7 @@ from utils.training_objectives import (
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
     symmetric_logit_center_loss,
+    worst_group_bce_loss,
 )
 
 
@@ -207,6 +208,7 @@ class Trainer(BaseModel):
         self.anchor_loss_weight = opt.anchor_loss_weight
         self.logit_anchor = opt.logit_anchor
         self.logit_center_loss_weight = opt.logit_center_loss_weight
+        self.augmentation_dro_weight = opt.augmentation_dro_weight
         self.cpd_direction_weight = opt.cpd_direction_weight
         self.cpd_content_weight = opt.cpd_content_weight
         self.cpd_direction_margin = opt.cpd_direction_margin
@@ -224,6 +226,8 @@ class Trainer(BaseModel):
             raise ValueError('--logit_anchor must be positive')
         if self.logit_center_loss_weight < 0:
             raise ValueError('--logit_center_loss_weight cannot be negative')
+        if self.augmentation_dro_weight < 0:
+            raise ValueError('--augmentation_dro_weight cannot be negative')
         if self.cpd_direction_weight < 0:
             raise ValueError('--cpd_direction_weight cannot be negative')
         if self.cpd_content_weight < 0:
@@ -313,6 +317,12 @@ class Trainer(BaseModel):
     def set_input(self, batch):
         self.input = batch[1].cuda()
         self.label = batch[5].cuda().float()
+        self.augmentation_groups = None
+        if self.augmentation_dro_weight > 0:
+            if len(batch) != 7:
+                raise ValueError(
+                    'augmentation DRO requires pseudo-domain labels')
+            self.augmentation_groups = batch[6].cuda().long()
         token_ids = self._to_cuda(batch[3])
         token_attention_mask = self._to_cuda(batch[4])
         if self.cpd_enabled:
@@ -409,6 +419,22 @@ class Trainer(BaseModel):
         else:
             self.loss_logit_center = self.classhead.new_zeros(())
 
+        if self.augmentation_dro_weight > 0:
+            raw_dro_loss, group_losses = worst_group_bce_loss(
+                self.classhead,
+                self.label,
+                self.augmentation_groups,
+            )
+            self.loss_augmentation_dro = (
+                self.augmentation_dro_weight * raw_dro_loss)
+            self.augmentation_group_losses = group_losses.detach()
+            self.worst_augmentation_group = torch.nan_to_num(
+                group_losses.detach(), nan=float('-inf')).argmax()
+        else:
+            self.loss_augmentation_dro = self.classhead.new_zeros(())
+            self.augmentation_group_losses = self.classhead.new_zeros(3)
+            self.worst_augmentation_group = self.classhead.new_tensor(-1)
+
         zero = self.classhead.new_zeros(())
         if self.cpd_active:
             self.loss_cpd_direction = (
@@ -460,6 +486,7 @@ class Trainer(BaseModel):
             + self.loss_classification
             + self.loss_anchor
             + self.loss_logit_center
+            + self.loss_augmentation_dro
             + self.loss_cpd_direction
             + self.loss_cpd_content
         )

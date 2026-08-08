@@ -15,6 +15,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.logit_anchor, 3.0)
         self.assertEqual(args.logit_center_loss_weight, 0.0)
+        self.assertEqual(args.augmentation_dro_weight, 0.0)
 
     def test_accepts_logit_anchor_options(self):
         args = self.parse([
@@ -103,6 +104,16 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260809-120000')
 
         self.assertTrue(name.endswith('__center-w1.0'))
+
+    def test_compact_name_records_active_augmentation_dro(self):
+        args = self.parse([
+            '--name', 'c2p_agdro',
+            '--augmentation_dro_weight', '1.0',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260809-130000')
+
+        self.assertTrue(name.endswith('__agdro-w1.0'))
 
     def test_compact_name_records_active_cpd_configuration(self):
         args = self.parse([
