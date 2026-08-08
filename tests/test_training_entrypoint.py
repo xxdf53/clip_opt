@@ -31,6 +31,7 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss_contrastive=value,
             loss_classification=value,
             loss_anchor=value,
+            loss_logit_center=value,
             loss_cpd_direction=value,
             loss_cpd_content=value,
             cpd_schedule_scale=0.5,
@@ -40,6 +41,7 @@ class TrainingEntrypointTests(unittest.TestCase):
             cpd_prompt_gap=value,
             real_logit_mean=value,
             fake_logit_mean=value,
+            logit_midpoint=value,
             real_anchor_deviation=value,
             fake_anchor_deviation=value,
         )
@@ -48,6 +50,8 @@ class TrainingEntrypointTests(unittest.TestCase):
 
         self.assertIn('contrastive=1.250000', text)
         self.assertIn('anchor=1.250000', text)
+        self.assertIn('logit_center=1.250000', text)
+        self.assertIn('logit_midpoint=1.250000', text)
         self.assertIn('cpd_direction=1.250000', text)
         self.assertIn('cpd_content=1.250000', text)
         self.assertIn('cpd_scale=0.500000', text)

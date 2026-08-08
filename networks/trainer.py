@@ -13,6 +13,7 @@ from utils.training_objectives import (
     cpd_direction_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
+    symmetric_logit_center_loss,
 )
 
 
@@ -205,6 +206,7 @@ class Trainer(BaseModel):
         self.claloss = opt.claloss
         self.anchor_loss_weight = opt.anchor_loss_weight
         self.logit_anchor = opt.logit_anchor
+        self.logit_center_loss_weight = opt.logit_center_loss_weight
         self.cpd_direction_weight = opt.cpd_direction_weight
         self.cpd_content_weight = opt.cpd_content_weight
         self.cpd_direction_margin = opt.cpd_direction_margin
@@ -220,6 +222,8 @@ class Trainer(BaseModel):
             raise ValueError('--anchor_loss_weight cannot be negative')
         if self.logit_anchor <= 0:
             raise ValueError('--logit_anchor must be positive')
+        if self.logit_center_loss_weight < 0:
+            raise ValueError('--logit_center_loss_weight cannot be negative')
         if self.cpd_direction_weight < 0:
             raise ValueError('--cpd_direction_weight cannot be negative')
         if self.cpd_content_weight < 0:
@@ -394,6 +398,17 @@ class Trainer(BaseModel):
         else:
             self.loss_anchor = self.classhead.new_zeros(())
 
+        if self.logit_center_loss_weight > 0:
+            self.loss_logit_center = (
+                self.logit_center_loss_weight
+                * symmetric_logit_center_loss(
+                    self.classhead,
+                    self.label,
+                )
+            )
+        else:
+            self.loss_logit_center = self.classhead.new_zeros(())
+
         zero = self.classhead.new_zeros(())
         if self.cpd_active:
             self.loss_cpd_direction = (
@@ -437,11 +452,14 @@ class Trainer(BaseModel):
         )
         for name, value in diagnostics.items():
             setattr(self, name, value)
+        self.logit_midpoint = 0.5 * (
+            self.real_logit_mean + self.fake_logit_mean)
 
         self.loss = (
             self.loss_contrastive
             + self.loss_classification
             + self.loss_anchor
+            + self.loss_logit_center
             + self.loss_cpd_direction
             + self.loss_cpd_content
         )

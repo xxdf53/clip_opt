@@ -117,6 +117,18 @@ def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):
     return F.smooth_l1_loss(logits, targets)
 
 
+def symmetric_logit_center_loss(logits, labels):
+    """Center the real/fake class means around the zero decision boundary."""
+    logits, labels = _flatten_binary_inputs(logits, labels)
+    real_logits = logits[labels < 0.5]
+    fake_logits = logits[labels >= 0.5]
+    if real_logits.numel() == 0 or fake_logits.numel() == 0:
+        return logits.sum() * 0.0
+
+    midpoint = 0.5 * (real_logits.mean() + fake_logits.mean())
+    return F.smooth_l1_loss(midpoint, torch.zeros_like(midpoint))
+
+
 def symmetric_logit_anchor_diagnostics(logits, labels, anchor=3.0):
     """Return detached real/fake means and deviations from their anchors."""
     if anchor <= 0:

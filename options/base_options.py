@@ -40,6 +40,9 @@ def build_experiment_name(opt, timestamp=None):
     if opt.anchor_loss_weight > 0:
         configuration_parts.append(
             f'anchor-w{opt.anchor_loss_weight}-t{opt.logit_anchor}')
+    if opt.logit_center_loss_weight > 0:
+        configuration_parts.append(
+            f'center-w{opt.logit_center_loss_weight}')
     if (
         opt.cpd_direction_weight > 0
         or opt.cpd_content_weight > 0
@@ -133,6 +136,12 @@ class BaseOptions:
                             help='weight of the symmetric logit anchor loss')
         parser.add_argument('--logit_anchor', type=float, default=3.0,
                             help='absolute real/fake target for logit anchoring')
+        parser.add_argument(
+            '--logit_center_loss_weight',
+            type=float,
+            default=0.0,
+            help='weight of symmetric real/fake mean logit centering',
+        )
         parser.add_argument('--cpd_direction_weight', type=float, default=0.0,
                             help='weight of counterfactual prompt direction alignment')
         parser.add_argument('--cpd_content_weight', type=float, default=0.0,

@@ -8,6 +8,7 @@ from utils.training_objectives import (
     cpd_direction_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
+    symmetric_logit_center_loss,
 )
 
 
@@ -111,6 +112,38 @@ class TrainingObjectiveTests(unittest.TestCase):
                 torch.tensor([0.0]),
                 anchor=0.0,
             )
+
+    def test_logit_center_is_zero_for_symmetric_class_means(self):
+        loss = symmetric_logit_center_loss(
+            torch.tensor([-6.0, 0.0, 2.0, 4.0]),
+            torch.tensor([0.0, 0.0, 1.0, 1.0]),
+        )
+
+        self.assertEqual(loss.item(), 0.0)
+
+    def test_logit_center_penalizes_a_shifted_midpoint(self):
+        centered = symmetric_logit_center_loss(
+            torch.tensor([-2.0, 2.0]),
+            torch.tensor([0.0, 1.0]),
+        )
+        shifted = symmetric_logit_center_loss(
+            torch.tensor([-1.0, 3.0]),
+            torch.tensor([0.0, 1.0]),
+        )
+
+        self.assertLess(centered.item(), shifted.item())
+
+    def test_logit_center_has_zero_gradient_for_single_class_batch(self):
+        logits = torch.tensor([-2.0, -1.0], requires_grad=True)
+        loss = symmetric_logit_center_loss(
+            logits,
+            torch.tensor([0.0, 0.0]),
+        )
+
+        loss.backward()
+
+        self.assertEqual(loss.item(), 0.0)
+        self.assertTrue(torch.equal(logits.grad, torch.zeros_like(logits)))
 
     def test_anchor_diagnostics_report_class_means_and_deviations(self):
         diagnostics = symmetric_logit_anchor_diagnostics(

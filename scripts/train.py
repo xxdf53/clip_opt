@@ -74,6 +74,7 @@ def format_training_losses(model):
         f'contrastive={model.loss_contrastive.item():.6f} '
         f'classification={model.loss_classification.item():.6f} '
         f'anchor={model.loss_anchor.item():.6f} '
+        f'logit_center={model.loss_logit_center.item():.6f} '
         f'cpd_direction={model.loss_cpd_direction.item():.6f} '
         f'cpd_content={model.loss_cpd_content.item():.6f} '
         f'cpd_scale={model.cpd_schedule_scale:.6f} '
@@ -84,6 +85,7 @@ def format_training_losses(model):
         f'cpd_prompt_gap={model.cpd_prompt_gap.item():.6f} '
         f'logit_real={model.real_logit_mean.item():.6f} '
         f'logit_fake={model.fake_logit_mean.item():.6f} '
+        f'logit_midpoint={model.logit_midpoint.item():.6f} '
         f'anchor_err_real={model.real_anchor_deviation.item():.6f} '
         f'anchor_err_fake={model.fake_anchor_deviation.item():.6f}'
     )
