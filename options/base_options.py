@@ -27,9 +27,12 @@ def build_experiment_name(opt, timestamp=None):
         character if character.isalnum() or character in '-_.' else '_'
         for character in opt.name.strip()
     ) or 'experiment'
+    data_seed = getattr(opt, 'data_seed', None)
+    seed_part = f'ms{opt.seed}' if data_seed is not None else f's{opt.seed}'
     configuration_parts = [
         timestamp,
-        f's{opt.seed}',
+        *([f'ds{data_seed}'] if data_seed is not None else []),
+        seed_part,
         f'r{opt.lora_r}a{opt.lora_alpha}d{opt.lora_dropout}',
         f'lr{opt.lr}',
         f'c{opt.claloss}',
@@ -101,6 +104,24 @@ class BaseOptions:
         parser.add_argument('--delr_freq',       type=int, default=20, help='frequency of change lr')
         parser.add_argument('--delr',            type=float, default=0.8, help='delr')
         parser.add_argument('--seed',            type=int, default=123, help='seed')
+        parser.add_argument(
+            '--data_seed',
+            type=int,
+            default=None,
+            help=(
+                'seed reserved for DataLoader workers; use with '
+                '--train_manifest to separate data randomness from --seed'
+            ),
+        )
+        parser.add_argument(
+            '--train_manifest',
+            type=str,
+            default='',
+            help=(
+                'newline-delimited image paths relative to the training root; '
+                'when set, training follows this exact sample order'
+            ),
+        )
         parser.add_argument('--clip',            type=str, default='./clip-vit-large-patch14/', help='clip path')
         parser.add_argument('--claloss',         type=float, default=0.5, help='classification loss weight')
         parser.add_argument('--cates',           nargs='+', default=['Deepfake', 'Camera'])

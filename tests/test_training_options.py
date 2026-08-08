@@ -48,6 +48,23 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.cpd_start_step, 400)
         self.assertEqual(args.cpd_warmup_steps, 400)
 
+    def test_data_seed_and_manifest_default_to_disabled(self):
+        args = self.parse([])
+
+        self.assertIsNone(args.data_seed)
+        self.assertEqual(args.train_manifest, '')
+
+    def test_compact_name_distinguishes_data_and_model_seeds(self):
+        args = self.parse([
+            '--name', 'paired',
+            '--seed', '42',
+            '--data_seed', '314159',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260808-120000')
+
+        self.assertIn('__ds314159__ms42__', name)
+
     def test_compact_name_records_active_anchor_configuration(self):
         args = self.parse([
             '--name', 'c2p_anchor',

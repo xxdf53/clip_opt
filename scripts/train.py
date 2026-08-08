@@ -2,6 +2,7 @@
 
 import os
 import random
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -100,6 +101,19 @@ def main():
     Logger(str(Path(opt.checkpoints_dir) / opt.name / 'log.log'))
     test_opt = TestOptions().parse(print_options=False)
     data_loader = create_dataloader(opt)
+    if opt.train_manifest:
+        manifest_path = Path(opt.train_manifest).resolve()
+        manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        manifest_samples = len(data_loader.dataset)
+        expected_samples = opt.total_steps * opt.batch_size
+        if manifest_samples != expected_samples:
+            raise ValueError(
+                f'training manifest contains {manifest_samples} samples, but '
+                f'total_steps * batch_size is {expected_samples}')
+        print(f'training_manifest={manifest_path}')
+        print(f'training_manifest_sha256={manifest_sha256}')
+        print(f'training_manifest_samples={manifest_samples}')
+        print(f'data_seed={opt.data_seed} model_seed={opt.seed}')
     model = Trainer(opt)
 
     def evaluate(epoch):
