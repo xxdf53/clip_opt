@@ -67,8 +67,6 @@ def build_minimal_model():
     model.model.logit_scale = nn.Parameter(
         torch.tensor(0.0), requires_grad=False)
     model.model.fc = nn.Linear(2, 1)
-    model.residual_vib = None
-
     def encode_text(self, input_ids, attention_mask):
         del attention_mask
         return input_ids.to(dtype=torch.float32)

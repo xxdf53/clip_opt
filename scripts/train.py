@@ -48,8 +48,12 @@ RETIRED_TRAINING_FLAGS = {
     '--rank_loss_weight',
     '--residual_alpha',
     '--residual_scale',
+    '--residual_vib',
     '--symmetric_prototype_head',
     '--use_local_features',
+    '--vib_beta',
+    '--vib_cls_weight',
+    '--vib_dim',
 }
 
 
@@ -135,11 +139,8 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if hasattr(model, 'loss_vib_kl'):
-        text += (
-            f' vib_cls={model.loss_vib_classification.item():.6f}'
-            f' vib_kl={model.loss_vib_kl.item():.6f}'
-        )
+    if getattr(model, 'residual_trust_weight', 0.0) > 0:
+        text += f' residual_trust={model.loss_residual_trust.item():.6f}'
     return text
 
 

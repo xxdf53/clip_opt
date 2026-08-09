@@ -11,43 +11,10 @@ from utils.training_objectives import (
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
+    residual_trust_region_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
-
-
-class ResidualVariationalBottleneck(nn.Module):
-    """Compress the task residual while retaining authenticity evidence."""
-
-    def __init__(self, feature_size, latent_dim=64):
-        super().__init__()
-        if latent_dim <= 0:
-            raise ValueError('latent_dim must be positive')
-        self.norm = nn.LayerNorm(feature_size)
-        self.mu = nn.Linear(feature_size, latent_dim)
-        self.logvar = nn.Linear(feature_size, latent_dim)
-        self.classifier = nn.Linear(latent_dim, 1)
-
-        nn.init.zeros_(self.logvar.weight)
-        nn.init.constant_(self.logvar.bias, -4.0)
-        nn.init.normal_(self.classifier.weight, mean=0.0, std=0.02)
-        nn.init.zeros_(self.classifier.bias)
-
-    def forward(self, residual):
-        features = self.norm(residual)
-        mu = self.mu(features)
-        logvar = self.logvar(features).clamp(min=-10.0, max=10.0)
-        if self.training:
-            latent = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
-        else:
-            latent = mu
-        return self.classifier(latent).squeeze(1), mu, logvar
-
-    @staticmethod
-    def kl_divergence(mu, logvar):
-        return -0.5 * (
-            1.0 + logvar - mu.square() - logvar.exp()
-        ).sum(dim=1).mean()
 
 
 class CLIPModel_lora(nn.Module):
@@ -60,8 +27,6 @@ class CLIPModel_lora(nn.Module):
         lora_r=16,
         lora_alpha=32,
         lora_dropout=0.05,
-        residual_vib=False,
-        vib_dim=64,
     ):
         super().__init__()
         self.model = CLIPModel.from_pretrained(name)
@@ -87,13 +52,6 @@ class CLIPModel_lora(nn.Module):
         self.model.fc = nn.Linear(projection_dim, num_classes)
         nn.init.normal_(self.model.fc.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.model.fc.bias)
-
-        self.residual_vib = None
-        if residual_vib:
-            self.residual_vib = ResidualVariationalBottleneck(
-                feature_size=projection_dim,
-                latent_dim=vib_dim,
-            )
 
     def encode_text(self, input_ids, attention_mask):
         text_outputs = self.model.text_model(
@@ -162,6 +120,7 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
+        return_image_residual=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         image_embeddings = F.normalize(
@@ -210,8 +169,7 @@ class CLIPModel_lora(nn.Module):
             * self.model.logit_scale.exp()
         )
         outputs = (logits_per_text.t(), class_logits.squeeze(1))
-        residual_vib = getattr(self, 'residual_vib', None)
-        if not return_cpd and residual_vib is None:
+        if not return_cpd and not return_image_residual:
             return outputs
 
         with torch.no_grad():
@@ -221,15 +179,8 @@ class CLIPModel_lora(nn.Module):
                 dim=-1,
             )
         image_residual = image_embeddings - frozen_embeddings.detach()
-        if return_cpd:
+        if return_cpd or return_image_residual:
             auxiliary['image_residual'] = image_residual
-        if residual_vib is not None:
-            vib_logits, vib_mu, vib_logvar = residual_vib(image_residual)
-            auxiliary.update({
-                'vib_logits': vib_logits,
-                'vib_mu': vib_mu,
-                'vib_logvar': vib_logvar,
-            })
         return outputs + (auxiliary,)
 
 
@@ -253,16 +204,12 @@ class Trainer(BaseModel):
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
         self.cpd_active = False
-        self.residual_vib_enabled = opt.residual_vib
-        self.vib_beta = opt.vib_beta
-        self.vib_cls_weight = opt.vib_cls_weight
+        self.residual_trust_weight = opt.residual_trust_weight
         self.model = CLIPModel_lora(
             name=opt.clip,
             lora_r=opt.lora_r,
             lora_alpha=opt.lora_alpha,
             lora_dropout=opt.lora_dropout,
-            residual_vib=opt.residual_vib,
-            vib_dim=opt.vib_dim,
         )
 
         parameter_count = sum(
@@ -365,15 +312,14 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
+            return_image_residual=self.residual_trust_weight > 0,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
         if self.cpd_active:
             self.cpd_components = auxiliary
-        if self.residual_vib_enabled:
-            self.vib_logits = auxiliary['vib_logits']
-            self.vib_mu = auxiliary['vib_mu']
-            self.vib_logvar = auxiliary['vib_logvar']
+        if self.residual_trust_weight > 0:
+            self.image_residual = auxiliary['image_residual']
 
     @staticmethod
     def contrastive_loss(logits):
@@ -468,23 +414,13 @@ class Trainer(BaseModel):
         for name, value in diagnostics.items():
             setattr(self, name, value)
 
-        if self.residual_vib_enabled:
-            self.loss_vib_classification = (
-                self.vib_cls_weight
-                * self.loss_fn(self.vib_logits, self.label)
+        self.loss_residual_trust = zero
+        if self.residual_trust_weight > 0:
+            self.loss_residual_trust = (
+                self.residual_trust_weight
+                * residual_trust_region_loss(self.image_residual)
             )
-            self.loss_vib_kl = (
-                self.vib_beta
-                * ResidualVariationalBottleneck.kl_divergence(
-                    self.vib_mu,
-                    self.vib_logvar,
-                )
-            )
-            self.loss = (
-                self.loss
-                + self.loss_vib_classification
-                + self.loss_vib_kl
-            )
+            self.loss = self.loss + self.loss_residual_trust
 
         anchor_diagnostics = symmetric_logit_anchor_diagnostics(
             self.classhead,

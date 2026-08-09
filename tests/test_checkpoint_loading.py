@@ -1,10 +1,7 @@
 import unittest
 
-import torch
-
 from utils.checkpoint_loading import (
     extract_training_state_dict,
-    residual_vib_dim,
 )
 
 
@@ -43,12 +40,6 @@ class TrainingCheckpointTests(unittest.TestCase):
             "'model' must be a state_dict mapping",
         ):
             extract_training_state_dict({'model': None})
-
-    def test_detects_residual_vib_dimension(self):
-        self.assertEqual(residual_vib_dim({
-            'residual_vib.mu.weight': torch.empty(32, 768),
-        }), 32)
-        self.assertIsNone(residual_vib_dim({'model.fc.weight': 1}))
 
 
 if __name__ == '__main__':

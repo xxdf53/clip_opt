@@ -9,12 +9,10 @@ class TrainingOptionTests(unittest.TestCase):
         parser = BaseOptions().initialize(argparse.ArgumentParser())
         return parser.parse_args(argv)
 
-    def test_residual_vib_defaults_to_disabled(self):
+    def test_residual_trust_defaults_to_disabled(self):
         args = self.parse([])
 
-        self.assertFalse(args.residual_vib)
-        self.assertEqual(args.vib_dim, 64)
-        self.assertEqual(args.vib_beta, 1e-4)
+        self.assertEqual(args.residual_trust_weight, 0.0)
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.cpd_direction_weight, 0.0)
 
@@ -35,17 +33,15 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertIn('__ds314159__ms42__', name)
 
-    def test_compact_name_records_residual_vib(self):
+    def test_compact_name_records_residual_trust_weight(self):
         args = self.parse([
-            '--name', 'c2p_rvib',
-            '--residual_vib',
-            '--vib_dim', '32',
-            '--vib_beta', '0.0002',
+            '--name', 'c2p_rtr',
+            '--residual_trust_weight', '1.0',
         ])
 
         name = build_experiment_name(args, timestamp='20260809-150000')
 
-        self.assertTrue(name.endswith('__rvib-d32-b0.0002-w1.0'))
+        self.assertTrue(name.endswith('__rtr-w1.0'))
 
     def test_compact_name_records_retained_gan_objectives(self):
         args = self.parse([

@@ -67,10 +67,9 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-The optional Residual Variational Information Bottleneck (RVIB) regularizes
-only the visual feature change introduced by LoRA. The frozen CLIP feature is
-used as a training-time reference; image-only inference remains unchanged and
-does not run the bottleneck or a second visual forward:
+Residual Trust-Region Regularization (RTR) directly limits the normalized LoRA
+feature drift from the frozen CLIP image feature. It adds no parameters and
+uses the frozen encoder only during training:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -80,19 +79,20 @@ python scripts/train.py \
   --classes car,cat,chair,horse \
   --clip ./clip-vit-large-patch14 \
   --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_rvib \
+  --name c2p_rtr \
   --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
-  --residual_vib --vib_dim 64 --vib_beta 0.0001 --vib_cls_weight 1.0
+  --residual_trust_weight 1.0
 ```
 
-RVIB adds no inference inputs or inference-time branch. Experiment directories
+RTR adds no inference inputs or inference-time branch. Experiment directories
 use a compact name capped at 180 UTF-8 bytes and record all active objectives.
-Failed GenImage paths (GAlC, AGDRO, gradient-accumulation emulation, PRH and
-SPH) were removed from the active implementation. Their checkpoints require an
-older Git revision; baseline, SLAR and CPD checkpoints remain compatible.
+Failed GenImage paths (GAlC, AGDRO, gradient-accumulation emulation, PRH, SPH
+and RVIB) were removed from the active implementation. Their checkpoints
+require an older Git revision; baseline, SLAR and CPD checkpoints remain
+compatible.
 
 ### 2) Inference / Testing
 

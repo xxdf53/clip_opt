@@ -20,16 +20,6 @@ def extract_training_state_dict(payload):
     return normalized, payload.get('total_steps')
 
 
-def residual_vib_dim(state_dict):
-    """Return the latent size encoded by an RVIB checkpoint, if present."""
-    weight = state_dict.get('residual_vib.mu.weight')
-    if weight is None:
-        return None
-    if not hasattr(weight, 'shape') or len(weight.shape) != 2:
-        raise ValueError('invalid residual_vib.mu.weight in checkpoint')
-    return int(weight.shape[0])
-
-
 def load_self_trained_checkpoint(
     checkpoint_path,
     clip_path,
@@ -51,16 +41,12 @@ def load_self_trained_checkpoint(
         weights_only=True,
     )
     state_dict, total_steps = extract_training_state_dict(payload)
-    vib_dim = residual_vib_dim(state_dict)
-
     model = CLIPModel_lora(
         name=str(clip_path),
         num_classes=1,
         lora_r=lora_r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
-        residual_vib=vib_dim is not None,
-        vib_dim=vib_dim or 64,
     )
     try:
         model.load_state_dict(state_dict, strict=True)
@@ -68,7 +54,7 @@ def load_self_trained_checkpoint(
         raise RuntimeError(
             'checkpoint does not match the inferred self-trained '
             'architecture. Verify lora_r, lora_alpha and lora_dropout; '
-            'retired PRH/SPH checkpoints require an older Git revision.'
+            'retired experimental checkpoints require an older Git revision.'
         ) from error
 
     model.to(device)

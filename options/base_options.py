@@ -46,10 +46,9 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
-    if opt.residual_vib:
+    if opt.residual_trust_weight > 0:
         configuration_parts.append(
-            f'rvib-d{opt.vib_dim}-b{opt.vib_beta}-w{opt.vib_cls_weight}'
-        )
+            f'rtr-w{opt.residual_trust_weight}')
 
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -169,30 +168,13 @@ class BaseOptions:
             help='steps used to linearly ramp CPD to its configured weight',
         )
         parser.add_argument(
-            '--residual_vib',
-            action='store_true',
+            '--residual_trust_weight',
+            type=float,
+            default=0.0,
             help=(
-                'regularize the LoRA-only visual residual with a training-only '
-                'variational information bottleneck'
+                'weight of the training-only normalized feature distance '
+                'between LoRA and frozen CLIP encoders'
             ),
-        )
-        parser.add_argument(
-            '--vib_dim',
-            type=int,
-            default=64,
-            help='latent dimension of the residual information bottleneck',
-        )
-        parser.add_argument(
-            '--vib_beta',
-            type=float,
-            default=1e-4,
-            help='weight of the residual bottleneck KL divergence',
-        )
-        parser.add_argument(
-            '--vib_cls_weight',
-            type=float,
-            default=1.0,
-            help='weight of the residual bottleneck auxiliary classifier',
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
@@ -253,12 +235,8 @@ class BaseOptions:
             raise ValueError('--cpd_start_step cannot be negative')
         if opt.cpd_warmup_steps < 0:
             raise ValueError('--cpd_warmup_steps cannot be negative')
-        if opt.vib_dim <= 0:
-            raise ValueError('--vib_dim must be positive')
-        if opt.vib_beta < 0:
-            raise ValueError('--vib_beta cannot be negative')
-        if opt.vib_cls_weight < 0:
-            raise ValueError('--vib_cls_weight cannot be negative')
+        if opt.residual_trust_weight < 0:
+            raise ValueError('--residual_trust_weight cannot be negative')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:
