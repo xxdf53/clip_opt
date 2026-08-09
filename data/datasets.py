@@ -3,7 +3,7 @@ import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
-from random import choice, random, randrange
+from random import choice, random
 from io import BytesIO
 from PIL import Image
 from PIL import ImageFile
@@ -13,17 +13,12 @@ from typing import Any, Callable, cast, Dict, List, Optional, Tuple
 import os
 from transformers import AutoTokenizer
 
-from utils.cpd import (
-    build_counterfactual_captions,
-    build_label_caption,
-    cpd_is_enabled,
-)
+from utils.captions import build_label_caption
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
 
 _tokenizer_cache = {}
-AUGMENTATION_GROUP_NAMES = ('clean', 'jpeg', 'blur')
 
 def _get_tokenizer(clip_path):
     if clip_path not in _tokenizer_cache:
@@ -70,15 +65,7 @@ class ImageFolder2(datasets.DatasetFolder):
         textpath = os.path.splitext(textpath)[0] + '.txt'
 
         sample = self.loader(path)
-        augmentation_group = None
-        if (
-            self.opt.isTrain
-            and getattr(self.opt, 'augmentation_dro_weight', 0.0) > 0
-        ):
-            augmentation_group = randrange(len(AUGMENTATION_GROUP_NAMES))
-            sample = apply_augmentation_group(
-                sample, self.opt, augmentation_group)
-        elif self.opt.isTrain and getattr(self.opt, 'data_aug', False):
+        if self.opt.isTrain and getattr(self.opt, 'data_aug', False):
             sample = data_augment(sample, self.opt)
         try:
             with open(textpath, 'r', encoding='utf-8') as file:
@@ -88,22 +75,16 @@ class ImageFolder2(datasets.DatasetFolder):
             caption = ' '
             caption_available = False
 
-        if self.opt.isTrain and cpd_is_enabled(self.opt):
+        if caption_available:
             text = build_label_caption(caption, self.opt.cates, target)
-            token_texts = list(build_counterfactual_captions(
-                caption, self.opt.cates))
-        elif caption_available:
-            text = build_label_caption(caption, self.opt.cates, target)
-            token_texts = [text]
         else:
             # Preserve the original baseline behavior when a caption file
             # cannot be read.
             text = ' '
-            token_texts = [text]
 
         tokenizer = _get_tokenizer(self.opt.clip)
         inputs = tokenizer(
-            token_texts,
+            [text],
             padding='max_length',
             max_length=tokenizer.model_max_length,
             truncation=True,
@@ -111,19 +92,15 @@ class ImageFolder2(datasets.DatasetFolder):
         )
         input_ids = inputs['input_ids']
         attention_mask = inputs['attention_mask']
-        if len(token_texts) == 1:
-            input_ids = input_ids[0]
-            attention_mask = attention_mask[0]
+        input_ids = input_ids[0]
+        attention_mask = attention_mask[0]
 
         if self.transform is not None:
             sample = self.transform(sample)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        result = (path, sample, text, input_ids, attention_mask, target)
-        if augmentation_group is not None:
-            result += (augmentation_group,)
-        return result
+        return path, sample, text, input_ids, attention_mask, target
 
         
 def dataset_folder(opt, root):
@@ -213,24 +190,6 @@ def data_augment(img, opt):
         qual = sample_discrete(opt.jpg_qual)
         img = jpeg_from_key(img, qual, method)
 
-    return Image.fromarray(img)
-
-
-def apply_augmentation_group(img, opt, group):
-    """Apply one explicit pseudo-domain transform for augmentation DRO."""
-    if group == 0:
-        return img
-
-    img = np.array(img)
-    if group == 1:
-        method = sample_discrete(opt.jpg_method)
-        quality = sample_discrete(opt.jpg_qual)
-        img = jpeg_from_key(img, quality, method)
-    elif group == 2:
-        sigma = sample_continuous(opt.blur_sig)
-        gaussian_blur(img, sigma)
-    else:
-        raise ValueError(f'unknown augmentation group: {group}')
     return Image.fromarray(img)
 
 

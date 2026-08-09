@@ -3,7 +3,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from scripts.train import discover_evaluation_sets, format_training_losses
+from scripts.train import (
+    discover_evaluation_sets,
+    format_training_losses,
+    reject_retired_training_flags,
+)
 
 
 class TrainingEntrypointTests(unittest.TestCase):
@@ -30,40 +34,23 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss=value,
             loss_contrastive=value,
             loss_classification=value,
-            loss_anchor=value,
-            loss_logit_center=value,
-            loss_augmentation_dro=value,
-            augmentation_group_losses=[value, value, value],
-            worst_augmentation_group=SimpleNamespace(item=lambda: 2),
-            loss_cpd_direction=value,
-            loss_cpd_content=value,
-            cpd_schedule_scale=0.5,
-            effective_cpd_direction_weight=0.25,
-            cpd_signed_projection=value,
-            cpd_content_alignment=value,
-            cpd_prompt_gap=value,
             real_logit_mean=value,
             fake_logit_mean=value,
-            logit_midpoint=value,
-            real_anchor_deviation=value,
-            fake_anchor_deviation=value,
         )
 
         text = format_training_losses(model)
 
         self.assertIn('contrastive=1.250000', text)
-        self.assertIn('anchor=1.250000', text)
-        self.assertIn('logit_center=1.250000', text)
-        self.assertIn('logit_midpoint=1.250000', text)
-        self.assertIn('augmentation_dro=1.250000', text)
-        self.assertIn('clean_bce=1.250000', text)
-        self.assertIn('worst_group=2', text)
-        self.assertIn('cpd_direction=1.250000', text)
-        self.assertIn('cpd_content=1.250000', text)
-        self.assertIn('cpd_scale=0.500000', text)
-        self.assertIn('cpd_direction_weight=0.250000', text)
-        self.assertIn('cpd_projection=1.250000', text)
-        self.assertNotIn('rank=', text)
+        self.assertIn('classification=1.250000', text)
+        self.assertIn('logit_real=1.250000', text)
+        self.assertIn('logit_fake=1.250000', text)
+
+    def test_rejects_retired_training_flags(self):
+        with self.assertRaisesRegex(ValueError, 'retired training options'):
+            reject_retired_training_flags([
+                '--patch_residual_head',
+                '--anchor_loss_weight=1',
+            ])
 
 
 if __name__ == '__main__':

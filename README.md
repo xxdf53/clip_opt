@@ -50,8 +50,8 @@ conda activate c2pclip
 ./train_UniversalFakeDetect.sh
 ```
 
-The symmetric Smooth L1 anchor keeps real/fake logits near fixed targets around
-the standard zero decision boundary:
+The optional Symmetric Prototype Head (SPH) replaces the linear classifier
+with the difference between fake and real cosine similarities:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -61,85 +61,18 @@ python scripts/train.py \
   --classes car,cat,chair,horse \
   --clip ./clip-vit-large-patch14 \
   --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_baseline_anchor \
+  --name c2p_sph \
   --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
-  --logit_anchor 3.0 --anchor_loss_weight 0.5
+  --symmetric_prototype_head
 ```
 
-Training logs include the anchor loss, real/fake batch logit means, and the
-mean absolute deviation of each class from its symmetric anchor. The objective
-does not add model parameters or alter image-only inference.
-
-Experiment directories use a compact name capped at 180 UTF-8 bytes and record
-the active anchor weight/target. The full configuration remains available in
-each directory's `opt.txt`.
-
-The active implementation intentionally contains only the original global
-C2P-CLIP/LoRA architecture, the Logit Anchor objective, and an optional
-training-only Counterfactual Prompt Decomposition (CPD) objective. Retired
-local-feature, residual gate, ranking-loss, and frozen-branch experiments
-remain recoverable from Git history but are not supported by the current CLI.
-
-#### Counterfactual Prompt Decomposition (experimental)
-
-CPD constructs two texts from the same caption in binary-label order:
-
-```text
-Camera. <caption> Camera.
-Deepfake. <caption> Deepfake.
-```
-
-Their difference defines a content-conditioned authenticity direction, while
-their mean defines the shared content center. During training only, the image
-is also encoded once with LoRA disabled. CPD encourages the LoRA feature
-residual to follow the label-conditioned authenticity direction and optionally
-reject the shared content direction. The extra text pair and frozen visual
-forward are not used at inference, and CPD adds no checkpoint parameters.
-
-The fixed-weight CPD pilot was seed-sensitive on held-out generators. The
-current stability experiment delays CPD until the base C2P and Logit Anchor
-objectives have formed a useful classifier, then linearly ramps CPD to its
-configured weight:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
-python scripts/train.py \
-  --dataroot ./ForenSynths_train_val_19test \
-  --textroot ./prefix_caption \
-  --classes car,cat,chair,horse \
-  --clip ./clip-vit-large-patch14 \
-  --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_slar_cpd_warmup \
-  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
-  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --delr 0.9 --delr_freq 10 \
-  --logit_anchor 3.0 --anchor_loss_weight 0.5 \
-  --cpd_direction_weight 0.5 \
-  --cpd_content_weight 0.0 \
-  --cpd_direction_margin 0.1 \
-  --cpd_start_step 400 \
-  --cpd_warmup_steps 400
-```
-
-This schedule keeps CPD off through step 400, ramps from zero to full strength
-over the next 400 steps, and uses weight 0.5 from step 800 onward. A zero start
-and zero warmup preserve the original fixed-weight behavior. Content rejection
-remains disabled until direction alignment improves held-out AP/AUROC across
-multiple seeds.
-
-Training logs additionally report:
-
-- `cpd_direction`: weighted direction loss;
-- `cpd_content`: weighted content-rejection loss;
-- `cpd_scale`: current delayed-warmup multiplier;
-- `cpd_direction_weight`: current effective direction weight;
-- `cpd_projection`: mean label-signed residual projection;
-- `cpd_content_align`: mean absolute content alignment;
-- `cpd_prompt_gap`: distance between the paired real/fake text embeddings.
+SPH adds no inference inputs: testing remains image-only. Experiment directories
+use a compact name capped at 180 UTF-8 bytes and append `sph` when the head is
+active. Failed experimental training paths are retained in Git history rather
+than the active CLI. Existing PRH checkpoints remain loadable for inference.
 
 ### 2) Inference / Testing
 
@@ -166,18 +99,18 @@ python scripts/test_airplane_official.py \
   --predictions_csv ./official_cnn_synth_predictions.csv
 ```
 
-Evaluate a self-trained baseline or Logit Anchor LoRA checkpoint through the
+Evaluate a self-trained baseline or SPH LoRA checkpoint through the
 same recursive, image-only dataset and preprocessing pipeline:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
 python scripts/test_checkpoint.py \
   --dataroot ./CNN_synth_testset \
-  --checkpoint ./c2p_checkpoints/c2p_anchor/model.pth \
+  --checkpoint ./c2p_checkpoints/c2p_sph/model.pth \
   --clip_path ./clip-vit-large-patch14 \
   --batch_size 64 --gpu 0 --num_workers 4 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --predictions_csv ./anchor_cnn_synth_predictions.csv
+  --predictions_csv ./sph_cnn_synth_predictions.csv
 ```
 
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
@@ -191,24 +124,24 @@ One model on `my_first_test`:
 ```bash
 python scripts/plot_logit_dist.py \
   --dataroot ./my_first_test \
-  --checkpoint ./c2p_checkpoints/c2p_anchor/model.pth \
+  --checkpoint ./c2p_checkpoints/c2p_sph/model.pth \
   --clip_path ./clip-vit-large-patch14 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --save ./anchor_logit_distribution.png
+  --save ./sph_logit_distribution.png
 ```
 
-Compare matched baseline and Logit Anchor checkpoints with shared bins:
+Compare matched baseline and SPH checkpoints with shared bins:
 
 ```bash
 python scripts/plot_logit_dist.py \
   --dataroot ./my_first_test \
   --checkpoint ./c2p_checkpoints/baseline/model.pth \
   --checkpoint_label Baseline \
-  --compare_checkpoint ./c2p_checkpoints/c2p_anchor/model.pth \
-  --compare_label LogitAnchor \
+  --compare_checkpoint ./c2p_checkpoints/c2p_sph/model.pth \
+  --compare_label SPH \
   --clip_path ./clip-vit-large-patch14 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --save ./baseline_vs_anchor_logits.png
+  --save ./baseline_vs_sph_logits.png
 ```
 
 

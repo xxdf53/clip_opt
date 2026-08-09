@@ -28,6 +28,15 @@ def has_patch_residual_head(state_dict):
     )
 
 
+def has_symmetric_prototype_head(state_dict):
+    """Detect SPH checkpoints from their prototype parameters."""
+    required_keys = {
+        'model.fc.real_prototype',
+        'model.fc.fake_prototype',
+    }
+    return required_keys.issubset(state_dict)
+
+
 def load_self_trained_checkpoint(
     checkpoint_path,
     clip_path,
@@ -49,6 +58,10 @@ def load_self_trained_checkpoint(
         weights_only=True,
     )
     state_dict, total_steps = extract_training_state_dict(payload)
+    patch_residual_head = has_patch_residual_head(state_dict)
+    symmetric_prototype_head = has_symmetric_prototype_head(state_dict)
+    if patch_residual_head and symmetric_prototype_head:
+        raise ValueError('checkpoint cannot contain both PRH and SPH heads')
 
     model = CLIPModel_lora(
         name=str(clip_path),
@@ -56,7 +69,8 @@ def load_self_trained_checkpoint(
         lora_r=lora_r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
-        patch_residual_head=has_patch_residual_head(state_dict),
+        patch_residual_head=patch_residual_head,
+        symmetric_prototype_head=symmetric_prototype_head,
     )
     try:
         model.load_state_dict(state_dict, strict=True)

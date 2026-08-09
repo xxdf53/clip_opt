@@ -1,4 +1,4 @@
-"""Train C2P-CLIP with optional Logit Anchor and CPD objectives."""
+"""Train the C2P-CLIP baseline or its symmetric prototype head."""
 
 import os
 import random
@@ -23,6 +23,56 @@ from utils.evaluation_schedule import (
 )
 from utils.util import Logger
 from scripts.validate import validate
+
+
+RETIRED_TRAINING_FLAGS = {
+    '--anchor_loss_weight',
+    '--augmentation_dro_weight',
+    '--cpd_content_weight',
+    '--cpd_direction_margin',
+    '--cpd_direction_weight',
+    '--cpd_start_step',
+    '--cpd_warmup_steps',
+    '--gradient_accumulation_steps',
+    '--gate_loss_weight',
+    '--gate_supervision_weight',
+    '--gate_target_margin',
+    '--init_baseline_checkpoint',
+    '--freeze_global_branch',
+    '--freeze_vision_lora',
+    '--local_candidate_loss_weight',
+    '--local_dim',
+    '--local_dropout',
+    '--local_fusion',
+    '--local_gate_init',
+    '--local_layer',
+    '--local_pool',
+    '--logit_anchor',
+    '--logit_margin',
+    '--logit_center_loss_weight',
+    '--margin_loss_weight',
+    '--patch_residual_head',
+    '--rank_loss_weight',
+    '--residual_alpha',
+    '--residual_scale',
+    '--use_local_features',
+}
+
+
+def reject_retired_training_flags(argv=None):
+    """Prevent removed experiments from being silently ignored by the CLI."""
+    argv = sys.argv[1:] if argv is None else argv
+    used_flags = {
+        argument.split('=', 1)[0]
+        for argument in argv
+        if argument.startswith('--')
+    }
+    retired_flags = sorted(used_flags & RETIRED_TRAINING_FLAGS)
+    if retired_flags:
+        raise ValueError(
+            'retired training options are no longer supported: '
+            + ', '.join(retired_flags)
+        )
 
 
 def seed_torch(seed=1029):
@@ -73,30 +123,13 @@ def format_training_losses(model):
         f'loss={model.loss.item():.6f} '
         f'contrastive={model.loss_contrastive.item():.6f} '
         f'classification={model.loss_classification.item():.6f} '
-        f'anchor={model.loss_anchor.item():.6f} '
-        f'logit_center={model.loss_logit_center.item():.6f} '
-        f'augmentation_dro={model.loss_augmentation_dro.item():.6f} '
-        f'clean_bce={model.augmentation_group_losses[0].item():.6f} '
-        f'jpeg_bce={model.augmentation_group_losses[1].item():.6f} '
-        f'blur_bce={model.augmentation_group_losses[2].item():.6f} '
-        f'worst_group={model.worst_augmentation_group.item():.0f} '
-        f'cpd_direction={model.loss_cpd_direction.item():.6f} '
-        f'cpd_content={model.loss_cpd_content.item():.6f} '
-        f'cpd_scale={model.cpd_schedule_scale:.6f} '
-        f'cpd_direction_weight='
-        f'{model.effective_cpd_direction_weight:.6f} '
-        f'cpd_projection={model.cpd_signed_projection.item():.6f} '
-        f'cpd_content_align={model.cpd_content_alignment.item():.6f} '
-        f'cpd_prompt_gap={model.cpd_prompt_gap.item():.6f} '
         f'logit_real={model.real_logit_mean.item():.6f} '
-        f'logit_fake={model.fake_logit_mean.item():.6f} '
-        f'logit_midpoint={model.logit_midpoint.item():.6f} '
-        f'anchor_err_real={model.real_anchor_deviation.item():.6f} '
-        f'anchor_err_fake={model.fake_anchor_deviation.item():.6f}'
+        f'logit_fake={model.fake_logit_mean.item():.6f}'
     )
 
 
 def main():
+    reject_retired_training_flags()
     opt = TrainOptions().parse()
     seed_torch(opt.seed)
 
@@ -112,23 +145,16 @@ def main():
         manifest_path = Path(opt.train_manifest).resolve()
         manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
         manifest_samples = len(data_loader.dataset)
-        expected_samples = (
-            opt.total_steps
-            * opt.batch_size
-            * opt.gradient_accumulation_steps
-        )
+        expected_samples = opt.total_steps * opt.batch_size
         if manifest_samples != expected_samples:
             raise ValueError(
                 f'training manifest contains {manifest_samples} samples, but '
-                f'total_steps * batch_size * gradient_accumulation_steps is '
+                f'total_steps * batch_size is '
                 f'{expected_samples}')
         print(f'training_manifest={manifest_path}')
         print(f'training_manifest_sha256={manifest_sha256}')
         print(f'training_manifest_samples={manifest_samples}')
         print(f'data_seed={opt.data_seed} model_seed={opt.seed}')
-        print(
-            f'gradient_accumulation_steps='
-            f'{opt.gradient_accumulation_steps}')
     model = Trainer(opt)
 
     def evaluate(epoch):
@@ -172,8 +198,7 @@ def main():
         model.save_networks(suffix)
         print(
             f'saving the latest model {opt.name} '
-            f'(epoch {epoch}, model.total_steps {model.total_steps}, '
-            f'model.micro_steps {model.micro_steps})')
+            f'(epoch {epoch}, model.total_steps {model.total_steps})')
         model.train()
         return model.total_steps
 
@@ -188,9 +213,7 @@ def main():
                 break
 
             model.set_input(batch)
-            optimizer_updated = model.optimize_parameters()
-            if not optimizer_updated:
-                continue
+            model.optimize_parameters()
 
             if model.total_steps % opt.loss_freq == 0:
                 timestamp = time.strftime(
@@ -199,8 +222,6 @@ def main():
                     timestamp,
                     f'{format_training_losses(model)} '
                     f'optimizer_step={model.total_steps} '
-                    f'micro_step={model.micro_steps} '
-                    f'accumulation={opt.gradient_accumulation_steps} '
                     f'lr={model.lr}',
                 )
 

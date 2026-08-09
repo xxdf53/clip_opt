@@ -3,6 +3,7 @@ import unittest
 from utils.checkpoint_loading import (
     extract_training_state_dict,
     has_patch_residual_head,
+    has_symmetric_prototype_head,
 )
 
 
@@ -49,6 +50,16 @@ class TrainingCheckpointTests(unittest.TestCase):
         }))
         self.assertFalse(has_patch_residual_head({
             'model.fc.weight': 2,
+        }))
+
+    def test_detects_symmetric_prototype_head(self):
+        self.assertTrue(has_symmetric_prototype_head({
+            'model.fc.real_prototype': 1,
+            'model.fc.fake_prototype': 2,
+        }))
+        self.assertFalse(has_symmetric_prototype_head({
+            'model.fc.weight': 1,
+            'model.fc.bias': 2,
         }))
 
 

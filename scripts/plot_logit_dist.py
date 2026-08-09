@@ -1,7 +1,7 @@
 """Plot raw-logit distributions from self-trained C2P-CLIP checkpoints.
 
-One or two baseline/Logit Anchor checkpoints can be compared with shared bins
-and axes. Both checkpoints must use the same LoRA configuration.
+One or two self-trained checkpoints can be compared with shared bins and axes.
+Both checkpoints must use the same LoRA configuration.
 """
 
 import argparse

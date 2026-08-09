@@ -11,7 +11,6 @@ class BaseModel(nn.Module):
         super(BaseModel, self).__init__()
         self.opt = opt
         self.total_steps = 0
-        self.micro_steps = 0
         self.isTrain = opt.isTrain
         self.lr = opt.lr
         self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)
@@ -26,7 +25,6 @@ class BaseModel(nn.Module):
             'model': self.model.state_dict(),
             # 'optimizer' : self.optimizer.state_dict(),
             'total_steps' : self.total_steps,
-            'micro_steps' : self.micro_steps,
         }
         torch.save(state_dict, save_path)
         try:
@@ -57,7 +55,6 @@ class BaseModel(nn.Module):
 
         self.model.load_state_dict(state_dict['model'])
         self.total_steps = state_dict['total_steps']
-        self.micro_steps = state_dict.get('micro_steps', self.total_steps)
 
         if self.isTrain and not self.opt.new_optim:
             self.optimizer.load_state_dict(state_dict['optimizer'])

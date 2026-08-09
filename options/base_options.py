@@ -37,33 +37,8 @@ def build_experiment_name(opt, timestamp=None):
         f'lr{opt.lr}',
         f'c{opt.claloss}',
     ]
-    if opt.anchor_loss_weight > 0:
-        configuration_parts.append(
-            f'anchor-w{opt.anchor_loss_weight}-t{opt.logit_anchor}')
-    if opt.logit_center_loss_weight > 0:
-        configuration_parts.append(
-            f'center-w{opt.logit_center_loss_weight}')
-    if opt.augmentation_dro_weight > 0:
-        configuration_parts.append(
-            f'agdro-w{opt.augmentation_dro_weight}')
-    if opt.gradient_accumulation_steps > 1:
-        configuration_parts.append(
-            f'accum{opt.gradient_accumulation_steps}')
-    if opt.patch_residual_head:
-        configuration_parts.append('prh')
-    if (
-        opt.cpd_direction_weight > 0
-        or opt.cpd_content_weight > 0
-    ):
-        cpd_configuration = (
-            f'cpd-d{opt.cpd_direction_weight}-'
-            f'c{opt.cpd_content_weight}-'
-            f'm{opt.cpd_direction_margin}'
-        )
-        if opt.cpd_start_step > 0 or opt.cpd_warmup_steps > 0:
-            cpd_configuration += (
-                f'-s{opt.cpd_start_step}-w{opt.cpd_warmup_steps}')
-        configuration_parts.append(cpd_configuration)
+    if opt.symmetric_prototype_head:
+        configuration_parts.append('sph')
 
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -97,12 +72,6 @@ class BaseOptions:
         parser.add_argument('--classes',         default='', help='which classes to use, separated by comma. If empty, use all subfolders of dataroot')
         parser.add_argument('--class_bal',       action='store_true')
         parser.add_argument('--batch_size',      type=int, default=64, help='input batch size')
-        parser.add_argument(
-            '--gradient_accumulation_steps',
-            type=int,
-            default=1,
-            help='micro-batches accumulated before each optimizer update',
-        )
         parser.add_argument('--keep_last_batch', action='store_true',
                             help='keep an incomplete final training batch instead of dropping it')
         parser.add_argument('--loadSize',        type=int, default=256, help='scale images to this size')
@@ -147,36 +116,10 @@ class BaseOptions:
         parser.add_argument('--lora_alpha',      type=int, default=32, help='LoRA scaling parameter')
         parser.add_argument('--lora_dropout',    type=float, default=0.1, help='LoRA dropout probability')
         parser.add_argument(
-            '--patch_residual_head',
+            '--symmetric_prototype_head',
             action='store_true',
-            help='fuse a local patch-residual logit with the CLS classifier',
+            help='replace the linear classifier with a symmetric cosine head',
         )
-        parser.add_argument('--anchor_loss_weight', type=float, default=0.0,
-                            help='weight of the symmetric logit anchor loss')
-        parser.add_argument('--logit_anchor', type=float, default=3.0,
-                            help='absolute real/fake target for logit anchoring')
-        parser.add_argument(
-            '--logit_center_loss_weight',
-            type=float,
-            default=0.0,
-            help='weight of symmetric real/fake mean logit centering',
-        )
-        parser.add_argument(
-            '--augmentation_dro_weight',
-            type=float,
-            default=0.0,
-            help='weight of worst clean/JPEG/blur group classification loss',
-        )
-        parser.add_argument('--cpd_direction_weight', type=float, default=0.0,
-                            help='weight of counterfactual prompt direction alignment')
-        parser.add_argument('--cpd_content_weight', type=float, default=0.0,
-                            help='weight of content rejection on the LoRA feature residual')
-        parser.add_argument('--cpd_direction_margin', type=float, default=0.1,
-                            help='minimum signed projection encouraged by CPD')
-        parser.add_argument('--cpd_start_step', type=int, default=0,
-                            help='optimizer step through which CPD stays disabled')
-        parser.add_argument('--cpd_warmup_steps', type=int, default=0,
-                            help='steps used to linearly ramp CPD to its configured weight')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True
