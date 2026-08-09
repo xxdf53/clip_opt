@@ -20,6 +20,14 @@ def extract_training_state_dict(payload):
     return normalized, payload.get('total_steps')
 
 
+def has_patch_residual_head(state_dict):
+    """Detect PRH checkpoints without changing the legacy file format."""
+    return any(
+        key.startswith('patch_residual_head.')
+        for key in state_dict
+    )
+
+
 def load_self_trained_checkpoint(
     checkpoint_path,
     clip_path,
@@ -28,7 +36,7 @@ def load_self_trained_checkpoint(
     lora_dropout,
     device,
 ):
-    """Build and strictly load a baseline or Logit Anchor LoRA checkpoint."""
+    """Build and strictly load a self-trained LoRA checkpoint."""
     from networks.trainer import CLIPModel_lora
 
     checkpoint_path = Path(checkpoint_path).expanduser().resolve()
@@ -48,12 +56,13 @@ def load_self_trained_checkpoint(
         lora_r=lora_r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
+        patch_residual_head=has_patch_residual_head(state_dict),
     )
     try:
         model.load_state_dict(state_dict, strict=True)
     except RuntimeError as error:
         raise RuntimeError(
-            'checkpoint does not match the current baseline/Logit Anchor '
+            'checkpoint does not match the inferred self-trained '
             'architecture. Verify lora_r, lora_alpha and lora_dropout; '
             'retired local-feature checkpoints require an older Git revision.'
         ) from error

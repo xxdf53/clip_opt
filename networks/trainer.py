@@ -18,6 +18,62 @@ from utils.training_objectives import (
 )
 
 
+class PatchResidualHead(nn.Module):
+    """Classify local inconsistencies in the final CLIP patch tokens."""
+
+    def __init__(self, hidden_size, output_size=1, bottleneck_size=128):
+        super().__init__()
+        feature_size = 2 * hidden_size
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(feature_size),
+            nn.Linear(feature_size, bottleneck_size),
+            nn.GELU(),
+            nn.Linear(bottleneck_size, output_size),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    @staticmethod
+    def _patch_grid(patch_tokens):
+        patch_count = patch_tokens.shape[1]
+        grid_size = int(patch_count ** 0.5)
+        if grid_size * grid_size != patch_count:
+            raise ValueError(
+                'PRH requires a square patch grid, '
+                f'but received {patch_count} patch tokens'
+            )
+        return patch_tokens.transpose(1, 2).reshape(
+            patch_tokens.shape[0],
+            patch_tokens.shape[2],
+            grid_size,
+            grid_size,
+        )
+
+    def forward(self, last_hidden_state):
+        if last_hidden_state.ndim != 3 or last_hidden_state.shape[1] < 2:
+            raise ValueError(
+                'PRH expects CLIP hidden states shaped '
+                '[batch, cls_plus_patches, hidden]'
+            )
+        patch_grid = self._patch_grid(last_hidden_state[:, 1:])
+        local_mean = F.avg_pool2d(
+            patch_grid,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            count_include_pad=False,
+        )
+        residual = patch_grid - local_mean
+        residual_features = torch.cat(
+            (
+                residual.abs().mean(dim=(-2, -1)),
+                residual.std(dim=(-2, -1), unbiased=False),
+            ),
+            dim=1,
+        )
+        return self.mlp(residual_features)
+
+
 class CLIPModel_lora(nn.Module):
     """C2P-CLIP image encoder with LoRA and a binary classification head."""
 
@@ -28,6 +84,7 @@ class CLIPModel_lora(nn.Module):
         lora_r=16,
         lora_alpha=32,
         lora_dropout=0.05,
+        patch_residual_head=False,
     ):
         super().__init__()
         self.model = CLIPModel.from_pretrained(name)
@@ -53,6 +110,12 @@ class CLIPModel_lora(nn.Module):
         self.model.fc = nn.Linear(projection_dim, num_classes)
         nn.init.normal_(self.model.fc.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.model.fc.bias)
+        self.patch_residual_head = None
+        if patch_residual_head:
+            self.patch_residual_head = PatchResidualHead(
+                hidden_size=self.model.config.vision_config.hidden_size,
+                output_size=num_classes,
+            )
 
     def encode_text(self, input_ids, attention_mask):
         text_outputs = self.model.text_model(
@@ -65,7 +128,7 @@ class CLIPModel_lora(nn.Module):
         )
         return self.model.text_projection(text_outputs.pooler_output)
 
-    def encode_image(self, images, disable_lora=False):
+    def _encode_image_outputs(self, images, disable_lora=False):
         def run_vision_tower():
             return self.vision_tower_lora(
                 pixel_values=images,
@@ -79,6 +142,13 @@ class CLIPModel_lora(nn.Module):
                 vision_outputs = run_vision_tower()
         else:
             vision_outputs = run_vision_tower()
+        return vision_outputs
+
+    def encode_image(self, images, disable_lora=False):
+        vision_outputs = self._encode_image_outputs(
+            images,
+            disable_lora=disable_lora,
+        )
         return self.model.visual_projection(vision_outputs.pooler_output)
 
     def _encode_counterfactual_prompts(
@@ -132,9 +202,19 @@ class CLIPModel_lora(nn.Module):
         labels=None,
         return_cpd=False,
     ):
+        vision_outputs = self._encode_image_outputs(images)
         image_embeddings = F.normalize(
-            self.encode_image(images), p=2, dim=-1)
+            self.model.visual_projection(vision_outputs.pooler_output),
+            p=2,
+            dim=-1,
+        )
         class_logits = self.model.fc(image_embeddings)
+        patch_residual_head = getattr(self, 'patch_residual_head', None)
+        if patch_residual_head is not None:
+            class_logits = (
+                class_logits
+                + patch_residual_head(vision_outputs.last_hidden_state)
+            )
         if cla:
             return class_logits
 
@@ -248,6 +328,7 @@ class Trainer(BaseModel):
             lora_r=opt.lora_r,
             lora_alpha=opt.lora_alpha,
             lora_dropout=opt.lora_dropout,
+            patch_residual_head=opt.patch_residual_head,
         )
 
         parameter_count = sum(

@@ -49,6 +49,8 @@ def build_experiment_name(opt, timestamp=None):
     if opt.gradient_accumulation_steps > 1:
         configuration_parts.append(
             f'accum{opt.gradient_accumulation_steps}')
+    if opt.patch_residual_head:
+        configuration_parts.append('prh')
     if (
         opt.cpd_direction_weight > 0
         or opt.cpd_content_weight > 0
@@ -144,6 +146,11 @@ class BaseOptions:
         parser.add_argument('--lora_r',          type=int, default=16, help='LoRA rank')
         parser.add_argument('--lora_alpha',      type=int, default=32, help='LoRA scaling parameter')
         parser.add_argument('--lora_dropout',    type=float, default=0.1, help='LoRA dropout probability')
+        parser.add_argument(
+            '--patch_residual_head',
+            action='store_true',
+            help='fuse a local patch-residual logit with the CLS classifier',
+        )
         parser.add_argument('--anchor_loss_weight', type=float, default=0.0,
                             help='weight of the symmetric logit anchor loss')
         parser.add_argument('--logit_anchor', type=float, default=3.0,

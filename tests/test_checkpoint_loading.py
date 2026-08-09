@@ -1,6 +1,9 @@
 import unittest
 
-from utils.checkpoint_loading import extract_training_state_dict
+from utils.checkpoint_loading import (
+    extract_training_state_dict,
+    has_patch_residual_head,
+)
 
 
 class TrainingCheckpointTests(unittest.TestCase):
@@ -38,6 +41,15 @@ class TrainingCheckpointTests(unittest.TestCase):
             "'model' must be a state_dict mapping",
         ):
             extract_training_state_dict({'model': None})
+
+    def test_detects_patch_residual_head_from_normalized_state(self):
+        self.assertTrue(has_patch_residual_head({
+            'patch_residual_head.mlp.1.weight': 1,
+            'model.fc.weight': 2,
+        }))
+        self.assertFalse(has_patch_residual_head({
+            'model.fc.weight': 2,
+        }))
 
 
 if __name__ == '__main__':

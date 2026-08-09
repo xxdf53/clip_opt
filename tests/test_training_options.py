@@ -17,6 +17,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.logit_center_loss_weight, 0.0)
         self.assertEqual(args.augmentation_dro_weight, 0.0)
         self.assertEqual(args.gradient_accumulation_steps, 1)
+        self.assertFalse(args.patch_residual_head)
 
     def test_accepts_logit_anchor_options(self):
         args = self.parse([
@@ -125,6 +126,16 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260809-140000')
 
         self.assertTrue(name.endswith('__accum2'))
+
+    def test_compact_name_records_patch_residual_head(self):
+        args = self.parse([
+            '--name', 'c2p_prh',
+            '--patch_residual_head',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260809-150000')
+
+        self.assertTrue(name.endswith('__prh'))
 
     def test_compact_name_records_active_cpd_configuration(self):
         args = self.parse([
