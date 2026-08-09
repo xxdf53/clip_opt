@@ -10,7 +10,7 @@ import torch.nn as nn
 from PIL import Image
 
 from data.datasets import ImageFolder2
-from networks.trainer import CLIPModel_lora, Trainer
+from networks.trainer import CLIPModel_lora, Trainer, local_contrastive_loss
 from utils.captions import build_label_caption
 from utils.cpd import (
     build_counterfactual_captions,
@@ -76,6 +76,13 @@ def build_minimal_model():
 
 
 class RetainedGanObjectiveTests(unittest.TestCase):
+    def test_local_contrastive_loss_is_scalar_for_any_local_batch_size(self):
+        for batch_size in (20, 22):
+            loss = local_contrastive_loss(
+                torch.randn(batch_size, batch_size))
+            self.assertEqual(loss.ndim, 0)
+            self.assertTrue(torch.isfinite(loss))
+
     def test_cpd_schedule_delays_and_warms_up(self):
         self.assertEqual(cpd_schedule_scale(400, 400, 400), 0.0)
         self.assertEqual(cpd_schedule_scale(600, 400, 400), 0.5)
@@ -137,7 +144,7 @@ class RetainedGanObjectiveTests(unittest.TestCase):
             return_cpd=True,
         )
 
-        self.assertEqual(contrastive.shape, (2, 2))
+        self.assertEqual(contrastive.shape, (1,))
         self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
         self.assertTrue(torch.any(auxiliary['image_residual'] != 0))

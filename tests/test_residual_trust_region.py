@@ -43,6 +43,7 @@ class ResidualTrustRegionTests(unittest.TestCase):
         )
 
         self.assertEqual(len(outputs), 3)
+        self.assertEqual(outputs[0].shape, (1,))
         self.assertEqual(outputs[2]['image_residual'].shape, (3, 4))
         self.assertEqual(calls, [False, True])
 

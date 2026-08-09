@@ -17,6 +17,16 @@ from utils.training_objectives import (
 )
 
 
+def local_contrastive_loss(logits):
+    """Compute symmetric CLIP loss before DataParallel gathers replicas."""
+    if logits.ndim != 2 or logits.shape[0] != logits.shape[1]:
+        raise ValueError('contrastive logits must be a square matrix')
+    targets = torch.arange(logits.shape[0], device=logits.device)
+    caption_loss = F.cross_entropy(logits, targets)
+    image_loss = F.cross_entropy(logits.t(), targets)
+    return 0.5 * (caption_loss + image_loss)
+
+
 class CLIPModel_lora(nn.Module):
     """C2P-CLIP image encoder with LoRA and one binary decision head."""
 
@@ -168,7 +178,8 @@ class CLIPModel_lora(nn.Module):
             text_embeddings @ image_embeddings.t()
             * self.model.logit_scale.exp()
         )
-        outputs = (logits_per_text.t(), class_logits.squeeze(1))
+        contrastive_loss = local_contrastive_loss(logits_per_text.t())
+        outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
         if not return_cpd and not return_image_residual:
             return outputs
 
@@ -257,7 +268,10 @@ class Trainer(BaseModel):
         if not self.isTrain or opt.continue_train:
             self.load_networks(opt.epoch)
 
-        self.model = nn.DataParallel(self.model).cuda()
+        self.model = nn.DataParallel(
+            self.model,
+            device_ids=opt.gpu_ids,
+        ).cuda()
 
     def adjust_learning_rate(self, min_lr=1e-6):
         previous_lr = self.optimizer.param_groups[0]['lr']
@@ -321,13 +335,6 @@ class Trainer(BaseModel):
         if self.residual_trust_weight > 0:
             self.image_residual = auxiliary['image_residual']
 
-    @staticmethod
-    def contrastive_loss(logits):
-        targets = torch.arange(len(logits), device=logits.device)
-        caption_loss = F.cross_entropy(logits, targets)
-        image_loss = F.cross_entropy(logits.t(), targets)
-        return (caption_loss + image_loss) / 2.0
-
     def update_cpd_schedule(self, step=None):
         """Update the delayed CPD weights for one optimizer step."""
         step = self.total_steps if step is None else step
@@ -350,10 +357,7 @@ class Trainer(BaseModel):
         self.update_cpd_schedule(step=self.total_steps + 1)
         self.forward()
 
-        device_logits = torch.split(
-            self.output, self.output.shape[1], dim=0)
-        self.loss_contrastive = sum(
-            self.contrastive_loss(logits) for logits in device_logits)
+        self.loss_contrastive = self.output.sum()
         self.loss_classification = (
             self.claloss * self.loss_fn(self.classhead, self.label))
         self.loss = self.loss_contrastive + self.loss_classification
