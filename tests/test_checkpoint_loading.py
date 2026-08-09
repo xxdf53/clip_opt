@@ -1,9 +1,10 @@
 import unittest
 
+import torch
+
 from utils.checkpoint_loading import (
     extract_training_state_dict,
-    has_patch_residual_head,
-    has_symmetric_prototype_head,
+    residual_vib_dim,
 )
 
 
@@ -43,24 +44,11 @@ class TrainingCheckpointTests(unittest.TestCase):
         ):
             extract_training_state_dict({'model': None})
 
-    def test_detects_patch_residual_head_from_normalized_state(self):
-        self.assertTrue(has_patch_residual_head({
-            'patch_residual_head.mlp.1.weight': 1,
-            'model.fc.weight': 2,
-        }))
-        self.assertFalse(has_patch_residual_head({
-            'model.fc.weight': 2,
-        }))
-
-    def test_detects_symmetric_prototype_head(self):
-        self.assertTrue(has_symmetric_prototype_head({
-            'model.fc.real_prototype': 1,
-            'model.fc.fake_prototype': 2,
-        }))
-        self.assertFalse(has_symmetric_prototype_head({
-            'model.fc.weight': 1,
-            'model.fc.bias': 2,
-        }))
+    def test_detects_residual_vib_dimension(self):
+        self.assertEqual(residual_vib_dim({
+            'residual_vib.mu.weight': torch.empty(32, 768),
+        }), 32)
+        self.assertIsNone(residual_vib_dim({'model.fc.weight': 1}))
 
 
 if __name__ == '__main__':

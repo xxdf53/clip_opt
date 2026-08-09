@@ -1,4 +1,4 @@
-"""Train the C2P-CLIP baseline or its symmetric prototype head."""
+"""Train C2P-CLIP with optional GAN objectives or residual bottleneck."""
 
 import os
 import random
@@ -26,13 +26,7 @@ from scripts.validate import validate
 
 
 RETIRED_TRAINING_FLAGS = {
-    '--anchor_loss_weight',
     '--augmentation_dro_weight',
-    '--cpd_content_weight',
-    '--cpd_direction_margin',
-    '--cpd_direction_weight',
-    '--cpd_start_step',
-    '--cpd_warmup_steps',
     '--gradient_accumulation_steps',
     '--gate_loss_weight',
     '--gate_supervision_weight',
@@ -47,7 +41,6 @@ RETIRED_TRAINING_FLAGS = {
     '--local_gate_init',
     '--local_layer',
     '--local_pool',
-    '--logit_anchor',
     '--logit_margin',
     '--logit_center_loss_weight',
     '--margin_loss_weight',
@@ -55,6 +48,7 @@ RETIRED_TRAINING_FLAGS = {
     '--rank_loss_weight',
     '--residual_alpha',
     '--residual_scale',
+    '--symmetric_prototype_head',
     '--use_local_features',
 }
 
@@ -119,13 +113,34 @@ def discover_evaluation_sets(test_root):
 
 
 def format_training_losses(model):
-    return (
+    text = (
         f'loss={model.loss.item():.6f} '
         f'contrastive={model.loss_contrastive.item():.6f} '
         f'classification={model.loss_classification.item():.6f} '
         f'logit_real={model.real_logit_mean.item():.6f} '
         f'logit_fake={model.fake_logit_mean.item():.6f}'
     )
+    if getattr(model, 'anchor_loss_weight', 0.0) > 0:
+        text += (
+            f' anchor={model.loss_anchor.item():.6f}'
+            f' anchor_err_real={model.real_anchor_deviation.item():.6f}'
+            f' anchor_err_fake={model.fake_anchor_deviation.item():.6f}'
+        )
+    if getattr(model, 'cpd_enabled', False):
+        text += (
+            f' cpd_direction={model.loss_cpd_direction.item():.6f}'
+            f' cpd_content={model.loss_cpd_content.item():.6f}'
+            f' cpd_scale={model.cpd_schedule_scale:.6f}'
+            f' cpd_projection={model.cpd_signed_projection.item():.6f}'
+            f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
+            f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
+        )
+    if hasattr(model, 'loss_vib_kl'):
+        text += (
+            f' vib_cls={model.loss_vib_classification.item():.6f}'
+            f' vib_kl={model.loss_vib_kl.item():.6f}'
+        )
+    return text
 
 
 def main():

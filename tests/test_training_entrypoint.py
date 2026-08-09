@@ -45,11 +45,29 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
+    def test_formats_residual_vib_losses_when_present(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            loss_vib_classification=value,
+            loss_vib_kl=value,
+            real_logit_mean=value,
+            fake_logit_mean=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('vib_cls=1.250000', text)
+        self.assertIn('vib_kl=1.250000', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([
                 '--patch_residual_head',
-                '--anchor_loss_weight=1',
+                '--augmentation_dro_weight=1',
+                '--symmetric_prototype_head',
             ])
 
 

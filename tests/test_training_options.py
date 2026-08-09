@@ -9,10 +9,14 @@ class TrainingOptionTests(unittest.TestCase):
         parser = BaseOptions().initialize(argparse.ArgumentParser())
         return parser.parse_args(argv)
 
-    def test_sph_defaults_to_disabled(self):
+    def test_residual_vib_defaults_to_disabled(self):
         args = self.parse([])
 
-        self.assertFalse(args.symmetric_prototype_head)
+        self.assertFalse(args.residual_vib)
+        self.assertEqual(args.vib_dim, 64)
+        self.assertEqual(args.vib_beta, 1e-4)
+        self.assertEqual(args.anchor_loss_weight, 0.0)
+        self.assertEqual(args.cpd_direction_weight, 0.0)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -31,15 +35,32 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertIn('__ds314159__ms42__', name)
 
-    def test_compact_name_records_sph(self):
+    def test_compact_name_records_residual_vib(self):
         args = self.parse([
-            '--name', 'c2p_sph',
-            '--symmetric_prototype_head',
+            '--name', 'c2p_rvib',
+            '--residual_vib',
+            '--vib_dim', '32',
+            '--vib_beta', '0.0002',
         ])
 
         name = build_experiment_name(args, timestamp='20260809-150000')
 
-        self.assertTrue(name.endswith('__sph'))
+        self.assertTrue(name.endswith('__rvib-d32-b0.0002-w1.0'))
+
+    def test_compact_name_records_retained_gan_objectives(self):
+        args = self.parse([
+            '--name', 'gan_objectives',
+            '--anchor_loss_weight', '0.5',
+            '--logit_anchor', '3',
+            '--cpd_direction_weight', '0.5',
+            '--cpd_start_step', '400',
+            '--cpd_warmup_steps', '400',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260809-150000')
+
+        self.assertIn('__anchor-w0.5-t3.0__', name)
+        self.assertIn('__cpd-d0.5-c0.0-m0.1-s400-w400', name)
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])

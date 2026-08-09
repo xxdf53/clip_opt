@@ -14,6 +14,7 @@ import os
 from transformers import AutoTokenizer
 
 from utils.captions import build_label_caption
+from utils.cpd import build_counterfactual_captions, cpd_is_enabled
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
@@ -75,16 +76,22 @@ class ImageFolder2(datasets.DatasetFolder):
             caption = ' '
             caption_available = False
 
-        if caption_available:
+        if self.opt.isTrain and cpd_is_enabled(self.opt):
             text = build_label_caption(caption, self.opt.cates, target)
+            token_texts = build_counterfactual_captions(
+                caption, self.opt.cates)
+        elif caption_available:
+            text = build_label_caption(caption, self.opt.cates, target)
+            token_texts = (text,)
         else:
             # Preserve the original baseline behavior when a caption file
             # cannot be read.
             text = ' '
+            token_texts = (text,)
 
         tokenizer = _get_tokenizer(self.opt.clip)
         inputs = tokenizer(
-            [text],
+            token_texts,
             padding='max_length',
             max_length=tokenizer.model_max_length,
             truncation=True,
@@ -92,8 +99,9 @@ class ImageFolder2(datasets.DatasetFolder):
         )
         input_ids = inputs['input_ids']
         attention_mask = inputs['attention_mask']
-        input_ids = input_ids[0]
-        attention_mask = attention_mask[0]
+        if len(token_texts) == 1:
+            input_ids = input_ids[0]
+            attention_mask = attention_mask[0]
 
         if self.transform is not None:
             sample = self.transform(sample)

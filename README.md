@@ -50,8 +50,27 @@ conda activate c2pclip
 ./train_UniversalFakeDetect.sh
 ```
 
-The optional Symmetric Prototype Head (SPH) replaces the linear classifier
-with the difference between fake and real cosine similarities:
+Two training-only objectives that improved the matched GAN protocol remain
+supported. Symmetric Logit Anchor (SLAR) keeps real/fake logits around fixed
+targets on opposite sides of zero. Counterfactual Prompt Decomposition (CPD)
+aligns the LoRA visual residual with the real/fake direction of paired captions:
+
+```bash
+python scripts/train.py [baseline arguments] \
+  --logit_anchor 3.0 --anchor_loss_weight 0.5 \
+  --cpd_direction_weight 0.5 --cpd_content_weight 0.0 \
+  --cpd_direction_margin 0.1 \
+  --cpd_start_step 400 --cpd_warmup_steps 400
+```
+
+Both are disabled by default and add no inference inputs. Their options are
+kept because failure on the diffusion protocol does not invalidate the matched
+GAN results.
+
+The optional Residual Variational Information Bottleneck (RVIB) regularizes
+only the visual feature change introduced by LoRA. The frozen CLIP feature is
+used as a training-time reference; image-only inference remains unchanged and
+does not run the bottleneck or a second visual forward:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -61,18 +80,19 @@ python scripts/train.py \
   --classes car,cat,chair,horse \
   --clip ./clip-vit-large-patch14 \
   --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_sph \
+  --name c2p_rvib \
   --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
-  --symmetric_prototype_head
+  --residual_vib --vib_dim 64 --vib_beta 0.0001 --vib_cls_weight 1.0
 ```
 
-SPH adds no inference inputs: testing remains image-only. Experiment directories
-use a compact name capped at 180 UTF-8 bytes and append `sph` when the head is
-active. Failed experimental training paths are retained in Git history rather
-than the active CLI. Existing PRH checkpoints remain loadable for inference.
+RVIB adds no inference inputs or inference-time branch. Experiment directories
+use a compact name capped at 180 UTF-8 bytes and record all active objectives.
+Failed GenImage paths (GAlC, AGDRO, gradient-accumulation emulation, PRH and
+SPH) were removed from the active implementation. Their checkpoints require an
+older Git revision; baseline, SLAR and CPD checkpoints remain compatible.
 
 ### 2) Inference / Testing
 
@@ -99,18 +119,18 @@ python scripts/test_airplane_official.py \
   --predictions_csv ./official_cnn_synth_predictions.csv
 ```
 
-Evaluate a self-trained baseline or SPH LoRA checkpoint through the
+Evaluate a self-trained baseline or experimental LoRA checkpoint through the
 same recursive, image-only dataset and preprocessing pipeline:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 \
 python scripts/test_checkpoint.py \
   --dataroot ./CNN_synth_testset \
-  --checkpoint ./c2p_checkpoints/c2p_sph/model.pth \
+  --checkpoint ./c2p_checkpoints/c2p_experiment/model.pth \
   --clip_path ./clip-vit-large-patch14 \
   --batch_size 64 --gpu 0 --num_workers 4 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --predictions_csv ./sph_cnn_synth_predictions.csv
+  --predictions_csv ./cnn_synth_predictions.csv
 ```
 
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
@@ -124,24 +144,24 @@ One model on `my_first_test`:
 ```bash
 python scripts/plot_logit_dist.py \
   --dataroot ./my_first_test \
-  --checkpoint ./c2p_checkpoints/c2p_sph/model.pth \
+  --checkpoint ./c2p_checkpoints/c2p_experiment/model.pth \
   --clip_path ./clip-vit-large-patch14 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --save ./sph_logit_distribution.png
+  --save ./logit_distribution.png
 ```
 
-Compare matched baseline and SPH checkpoints with shared bins:
+Compare matched baseline and experimental checkpoints with shared bins:
 
 ```bash
 python scripts/plot_logit_dist.py \
   --dataroot ./my_first_test \
   --checkpoint ./c2p_checkpoints/baseline/model.pth \
   --checkpoint_label Baseline \
-  --compare_checkpoint ./c2p_checkpoints/c2p_sph/model.pth \
-  --compare_label SPH \
+  --compare_checkpoint ./c2p_checkpoints/c2p_experiment/model.pth \
+  --compare_label Experiment \
   --clip_path ./clip-vit-large-patch14 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --save ./baseline_vs_sph_logits.png
+  --save ./baseline_vs_experiment_logits.png
 ```
 
 

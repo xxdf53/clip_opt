@@ -37,8 +37,19 @@ def build_experiment_name(opt, timestamp=None):
         f'lr{opt.lr}',
         f'c{opt.claloss}',
     ]
-    if opt.symmetric_prototype_head:
-        configuration_parts.append('sph')
+    if opt.anchor_loss_weight > 0:
+        configuration_parts.append(
+            f'anchor-w{opt.anchor_loss_weight}-t{opt.logit_anchor}')
+    if opt.cpd_direction_weight > 0 or opt.cpd_content_weight > 0:
+        configuration_parts.append(
+            f'cpd-d{opt.cpd_direction_weight}-c{opt.cpd_content_weight}-'
+            f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
+            f'w{opt.cpd_warmup_steps}'
+        )
+    if opt.residual_vib:
+        configuration_parts.append(
+            f'rvib-d{opt.vib_dim}-b{opt.vib_beta}-w{opt.vib_cls_weight}'
+        )
 
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -116,9 +127,72 @@ class BaseOptions:
         parser.add_argument('--lora_alpha',      type=int, default=32, help='LoRA scaling parameter')
         parser.add_argument('--lora_dropout',    type=float, default=0.1, help='LoRA dropout probability')
         parser.add_argument(
-            '--symmetric_prototype_head',
+            '--anchor_loss_weight',
+            type=float,
+            default=0.0,
+            help='weight of the GAN-validated symmetric logit anchor loss',
+        )
+        parser.add_argument(
+            '--logit_anchor',
+            type=float,
+            default=3.0,
+            help='absolute real/fake target used by symmetric logit anchoring',
+        )
+        parser.add_argument(
+            '--cpd_direction_weight',
+            type=float,
+            default=0.0,
+            help='weight of counterfactual prompt direction alignment',
+        )
+        parser.add_argument(
+            '--cpd_content_weight',
+            type=float,
+            default=0.0,
+            help='weight of content rejection on the LoRA feature residual',
+        )
+        parser.add_argument(
+            '--cpd_direction_margin',
+            type=float,
+            default=0.1,
+            help='minimum signed residual projection encouraged by CPD',
+        )
+        parser.add_argument(
+            '--cpd_start_step',
+            type=int,
+            default=0,
+            help='optimizer step through which CPD remains disabled',
+        )
+        parser.add_argument(
+            '--cpd_warmup_steps',
+            type=int,
+            default=0,
+            help='steps used to linearly ramp CPD to its configured weight',
+        )
+        parser.add_argument(
+            '--residual_vib',
             action='store_true',
-            help='replace the linear classifier with a symmetric cosine head',
+            help=(
+                'regularize the LoRA-only visual residual with a training-only '
+                'variational information bottleneck'
+            ),
+        )
+        parser.add_argument(
+            '--vib_dim',
+            type=int,
+            default=64,
+            help='latent dimension of the residual information bottleneck',
+        )
+        parser.add_argument(
+            '--vib_beta',
+            type=float,
+            default=1e-4,
+            help='weight of the residual bottleneck KL divergence',
+        )
+        parser.add_argument(
+            '--vib_cls_weight',
+            type=float,
+            default=1.0,
+            help='weight of the residual bottleneck auxiliary classifier',
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
@@ -165,6 +239,26 @@ class BaseOptions:
         opt = self.gather_options()
         opt.isTrain = self.isTrain   # train or test
         opt.imgroot = opt.dataroot
+        if opt.anchor_loss_weight < 0:
+            raise ValueError('--anchor_loss_weight cannot be negative')
+        if opt.logit_anchor <= 0:
+            raise ValueError('--logit_anchor must be positive')
+        if opt.cpd_direction_weight < 0:
+            raise ValueError('--cpd_direction_weight cannot be negative')
+        if opt.cpd_content_weight < 0:
+            raise ValueError('--cpd_content_weight cannot be negative')
+        if opt.cpd_direction_margin < 0:
+            raise ValueError('--cpd_direction_margin cannot be negative')
+        if opt.cpd_start_step < 0:
+            raise ValueError('--cpd_start_step cannot be negative')
+        if opt.cpd_warmup_steps < 0:
+            raise ValueError('--cpd_warmup_steps cannot be negative')
+        if opt.vib_dim <= 0:
+            raise ValueError('--vib_dim must be positive')
+        if opt.vib_beta < 0:
+            raise ValueError('--vib_beta cannot be negative')
+        if opt.vib_cls_weight < 0:
+            raise ValueError('--vib_cls_weight cannot be negative')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:
