@@ -205,6 +205,7 @@ class Trainer(BaseModel):
         super().__init__(opt)
         self.delr = opt.delr
         self.claloss = opt.claloss
+        self.gradient_accumulation_steps = opt.gradient_accumulation_steps
         self.anchor_loss_weight = opt.anchor_loss_weight
         self.logit_anchor = opt.logit_anchor
         self.logit_center_loss_weight = opt.logit_center_loss_weight
@@ -220,6 +221,9 @@ class Trainer(BaseModel):
         self.effective_cpd_content_weight = 0.0
         self.cpd_active = False
 
+        if self.gradient_accumulation_steps <= 0:
+            raise ValueError(
+                '--gradient_accumulation_steps must be positive')
         if self.anchor_loss_weight < 0:
             raise ValueError('--anchor_loss_weight cannot be negative')
         if self.logit_anchor <= 0:
@@ -367,9 +371,10 @@ class Trainer(BaseModel):
         image_loss = F.cross_entropy(logits.t(), targets)
         return (caption_loss + image_loss) / 2.0
 
-    def update_cpd_schedule(self):
+    def update_cpd_schedule(self, step=None):
+        step = self.total_steps if step is None else step
         self.cpd_schedule_scale = cpd_schedule_scale(
-            self.total_steps,
+            step,
             start_step=self.cpd_start_step,
             warmup_steps=self.cpd_warmup_steps,
         )
@@ -385,8 +390,21 @@ class Trainer(BaseModel):
             )
         )
 
+    def _begin_gradient_accumulation(self):
+        if self.micro_steps % self.gradient_accumulation_steps == 0:
+            self.optimizer.zero_grad()
+
+    def _finish_gradient_accumulation(self):
+        self.micro_steps += 1
+        if self.micro_steps % self.gradient_accumulation_steps != 0:
+            return False
+        self.optimizer.step()
+        self.total_steps += 1
+        return True
+
     def optimize_parameters(self):
-        self.update_cpd_schedule()
+        self._begin_gradient_accumulation()
+        self.update_cpd_schedule(step=self.total_steps + 1)
         self.forward()
 
         device_logits = torch.split(
@@ -490,6 +508,5 @@ class Trainer(BaseModel):
             + self.loss_cpd_direction
             + self.loss_cpd_content
         )
-        self.optimizer.zero_grad()
         self.loss.backward()
-        self.optimizer.step()
+        return self._finish_gradient_accumulation()

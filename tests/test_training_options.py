@@ -16,6 +16,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.logit_anchor, 3.0)
         self.assertEqual(args.logit_center_loss_weight, 0.0)
         self.assertEqual(args.augmentation_dro_weight, 0.0)
+        self.assertEqual(args.gradient_accumulation_steps, 1)
 
     def test_accepts_logit_anchor_options(self):
         args = self.parse([
@@ -114,6 +115,16 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260809-130000')
 
         self.assertTrue(name.endswith('__agdro-w1.0'))
+
+    def test_compact_name_records_gradient_accumulation(self):
+        args = self.parse([
+            '--name', 'c2p_accum',
+            '--gradient_accumulation_steps', '2',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260809-140000')
+
+        self.assertTrue(name.endswith('__accum2'))
 
     def test_compact_name_records_active_cpd_configuration(self):
         args = self.parse([

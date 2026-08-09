@@ -112,15 +112,23 @@ def main():
         manifest_path = Path(opt.train_manifest).resolve()
         manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
         manifest_samples = len(data_loader.dataset)
-        expected_samples = opt.total_steps * opt.batch_size
+        expected_samples = (
+            opt.total_steps
+            * opt.batch_size
+            * opt.gradient_accumulation_steps
+        )
         if manifest_samples != expected_samples:
             raise ValueError(
                 f'training manifest contains {manifest_samples} samples, but '
-                f'total_steps * batch_size is {expected_samples}')
+                f'total_steps * batch_size * gradient_accumulation_steps is '
+                f'{expected_samples}')
         print(f'training_manifest={manifest_path}')
         print(f'training_manifest_sha256={manifest_sha256}')
         print(f'training_manifest_samples={manifest_samples}')
         print(f'data_seed={opt.data_seed} model_seed={opt.seed}')
+        print(
+            f'gradient_accumulation_steps='
+            f'{opt.gradient_accumulation_steps}')
     model = Trainer(opt)
 
     def evaluate(epoch):
@@ -164,7 +172,8 @@ def main():
         model.save_networks(suffix)
         print(
             f'saving the latest model {opt.name} '
-            f'(epoch {epoch}, model.total_steps {model.total_steps})')
+            f'(epoch {epoch}, model.total_steps {model.total_steps}, '
+            f'model.micro_steps {model.micro_steps})')
         model.train()
         return model.total_steps
 
@@ -178,9 +187,10 @@ def main():
             if model.total_steps >= opt.total_steps:
                 break
 
-            model.total_steps += 1
             model.set_input(batch)
-            model.optimize_parameters()
+            optimizer_updated = model.optimize_parameters()
+            if not optimizer_updated:
+                continue
 
             if model.total_steps % opt.loss_freq == 0:
                 timestamp = time.strftime(
@@ -188,7 +198,10 @@ def main():
                 print(
                     timestamp,
                     f'{format_training_losses(model)} '
-                    f'step={model.total_steps} lr={model.lr}',
+                    f'optimizer_step={model.total_steps} '
+                    f'micro_step={model.micro_steps} '
+                    f'accumulation={opt.gradient_accumulation_steps} '
+                    f'lr={model.lr}',
                 )
 
             if should_evaluate(model.total_steps, opt.eval_freq):

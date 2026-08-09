@@ -1,6 +1,7 @@
 import unittest
 from contextlib import contextmanager
 from types import MethodType, SimpleNamespace
+from unittest.mock import Mock
 
 import torch
 import torch.nn as nn
@@ -47,6 +48,25 @@ def build_minimal_model():
 
 
 class CounterfactualPromptModelTests(unittest.TestCase):
+    def test_two_micro_batches_produce_one_optimizer_update(self):
+        trainer = Trainer.__new__(Trainer)
+        trainer.gradient_accumulation_steps = 2
+        trainer.micro_steps = 0
+        trainer.total_steps = 0
+        trainer.optimizer = Mock()
+
+        trainer._begin_gradient_accumulation()
+        first_updated = trainer._finish_gradient_accumulation()
+        trainer._begin_gradient_accumulation()
+        second_updated = trainer._finish_gradient_accumulation()
+
+        self.assertFalse(first_updated)
+        self.assertTrue(second_updated)
+        self.assertEqual(trainer.micro_steps, 2)
+        self.assertEqual(trainer.total_steps, 1)
+        trainer.optimizer.zero_grad.assert_called_once_with()
+        trainer.optimizer.step.assert_called_once_with()
+
     def test_trainer_activates_cpd_only_after_scheduled_start(self):
         trainer = Trainer.__new__(Trainer)
         trainer.total_steps = 400

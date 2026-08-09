@@ -46,6 +46,9 @@ def build_experiment_name(opt, timestamp=None):
     if opt.augmentation_dro_weight > 0:
         configuration_parts.append(
             f'agdro-w{opt.augmentation_dro_weight}')
+    if opt.gradient_accumulation_steps > 1:
+        configuration_parts.append(
+            f'accum{opt.gradient_accumulation_steps}')
     if (
         opt.cpd_direction_weight > 0
         or opt.cpd_content_weight > 0
@@ -92,6 +95,12 @@ class BaseOptions:
         parser.add_argument('--classes',         default='', help='which classes to use, separated by comma. If empty, use all subfolders of dataroot')
         parser.add_argument('--class_bal',       action='store_true')
         parser.add_argument('--batch_size',      type=int, default=64, help='input batch size')
+        parser.add_argument(
+            '--gradient_accumulation_steps',
+            type=int,
+            default=1,
+            help='micro-batches accumulated before each optimizer update',
+        )
         parser.add_argument('--keep_last_batch', action='store_true',
                             help='keep an incomplete final training batch instead of dropping it')
         parser.add_argument('--loadSize',        type=int, default=256, help='scale images to this size')
