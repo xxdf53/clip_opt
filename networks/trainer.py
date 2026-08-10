@@ -1,5 +1,3 @@
-from contextlib import contextmanager
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,7 +6,10 @@ from transformers import CLIPModel
 
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
-from utils.parameter_ema import TrainableParameterEMA
+from utils.degradation_consistency import (
+    degradation_consistency_loss,
+    resize_degraded_view,
+)
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
@@ -215,7 +216,9 @@ class Trainer(BaseModel):
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
         self.cpd_active = False
-        self.ema_decay = opt.ema_decay
+        self.degradation_consistency_weight = (
+            opt.degradation_consistency_weight)
+        self.degradation_scale = opt.degradation_scale
         self.model = CLIPModel_lora(
             name=opt.clip,
             lora_r=opt.lora_r,
@@ -272,11 +275,6 @@ class Trainer(BaseModel):
             self.model,
             device_ids=opt.gpu_ids,
         ).cuda()
-        self.parameter_ema = (
-            TrainableParameterEMA(self.ema_decay)
-            if self.ema_decay > 0
-            else None
-        )
 
     def adjust_learning_rate(self, min_lr=1e-6):
         previous_lr = self.optimizer.param_groups[0]['lr']
@@ -322,9 +320,10 @@ class Trainer(BaseModel):
             self.cpd_input_ids = None
             self.cpd_attention_mask = None
 
-    def forward(self):
+    def forward(self, images=None):
+        images = self.input if images is None else images
         outputs = self.model(
-            self.input,
+            images,
             self.input_ids,
             self.attention_mask,
             cpd_input_ids=self.cpd_input_ids,
@@ -336,6 +335,17 @@ class Trainer(BaseModel):
         auxiliary = outputs[2] if len(outputs) == 3 else {}
         if self.cpd_active:
             self.cpd_components = auxiliary
+
+    def original_view_teacher_logits(self):
+        """Predict the clean view without retaining a teacher graph."""
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            with torch.no_grad():
+                logits = self.model(self.input, cla=True).flatten()
+        finally:
+            self.model.train(was_training)
+        return logits.detach()
 
     def update_cpd_schedule(self, step=None):
         """Update the delayed CPD weights for one optimizer step."""
@@ -357,7 +367,16 @@ class Trainer(BaseModel):
     def optimize_parameters(self):
         self.optimizer.zero_grad()
         self.update_cpd_schedule(step=self.total_steps + 1)
-        self.forward()
+
+        teacher_logits = None
+        training_images = self.input
+        if self.degradation_consistency_weight > 0:
+            teacher_logits = self.original_view_teacher_logits()
+            training_images = resize_degraded_view(
+                self.input,
+                scale=self.degradation_scale,
+            )
+        self.forward(images=training_images)
 
         self.loss_contrastive = self.output.sum()
         self.loss_classification = (
@@ -365,6 +384,17 @@ class Trainer(BaseModel):
         self.loss = self.loss_contrastive + self.loss_classification
 
         zero = self.classhead.new_zeros(())
+        self.loss_degradation_consistency = zero
+        if teacher_logits is not None:
+            self.loss_degradation_consistency = (
+                self.degradation_consistency_weight
+                * degradation_consistency_loss(
+                    self.classhead,
+                    teacher_logits,
+                )
+            )
+            self.loss = self.loss + self.loss_degradation_consistency
+
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:
             self.loss_anchor = (
@@ -430,15 +460,4 @@ class Trainer(BaseModel):
 
         self.loss.backward()
         self.optimizer.step()
-        if self.parameter_ema is not None:
-            self.parameter_ema.update(self.model.module)
         self.total_steps += 1
-
-    @contextmanager
-    def ema_scope(self):
-        """Use averaged weights for evaluation and checkpoint saving."""
-        if self.parameter_ema is None:
-            yield
-            return
-        with self.parameter_ema.average_parameters(self.model.module):
-            yield

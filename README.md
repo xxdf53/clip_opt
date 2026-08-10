@@ -67,9 +67,10 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-The optional trainable-parameter EMA smooths the LoRA adapters and binary
-classifier during training. Evaluation and checkpoint saving temporarily use
-the averaged weights, while the live optimizer weights continue training:
+The optional degradation-consistency objective uses the clean image as a
+stop-gradient teacher and trains on a lightly downsampled/restored view. It is
+designed to reduce generator-specific resampling sensitivity without adding
+inference inputs, layers, or checkpoint fields:
 
 ```bash
 TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
@@ -79,20 +80,21 @@ python scripts/train.py \
   --classes car,cat,chair,horse \
   --clip ./clip-vit-large-patch14 \
   --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_ema \
+  --name c2p_degradation_consistency \
   --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
   --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
   --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
   --delr 0.9 --delr_freq 10 \
-  --ema_decay 0.99
+  --degradation_consistency_weight 1.0 \
+  --degradation_scale 0.75
 ```
 
-EMA adds no inference inputs, model layers, or checkpoint fields. Experiment
-directories use a compact name capped at 180 UTF-8 bytes and record all active
-objectives. Failed GenImage paths (GAlC, AGDRO, gradient-accumulation
-emulation, PRH, SPH, RVIB and RTR) were removed from the active implementation.
-Their checkpoints require an older Git revision; baseline, SLAR and CPD
-checkpoints remain compatible.
+The objective is disabled by default. Experiment directories use a compact
+name capped at 180 UTF-8 bytes and record all active objectives. Failed
+GenImage paths (GAlC, AGDRO, gradient-accumulation emulation, PRH, SPH, RVIB,
+RTR and EMA) were removed from the active implementation. Their checkpoints
+require an older Git revision when they changed the model structure; baseline,
+SLAR, CPD and standard LoRA checkpoints remain compatible.
 
 ### 2) Inference / Testing
 

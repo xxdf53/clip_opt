@@ -1,4 +1,4 @@
-"""Train C2P-CLIP with optional GAN objectives or residual bottleneck."""
+"""Train C2P-CLIP with optional training-only objectives."""
 
 import os
 import random
@@ -27,6 +27,7 @@ from scripts.validate import validate
 
 RETIRED_TRAINING_FLAGS = {
     '--augmentation_dro_weight',
+    '--ema_decay',
     '--gradient_accumulation_steps',
     '--gate_loss_weight',
     '--gate_supervision_weight',
@@ -140,8 +141,11 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if getattr(model, 'ema_decay', 0.0) > 0:
-        text += f' ema_decay={model.ema_decay:.6f}'
+    if getattr(model, 'degradation_consistency_weight', 0.0) > 0:
+        text += (
+            ' degradation_consistency='
+            f'{model.loss_degradation_consistency.item():.6f}'
+        )
     return text
 
 
@@ -207,13 +211,12 @@ def main():
         return round(mean_accuracy, 4)
 
     def evaluate_and_save(epoch):
-        with model.ema_scope():
-            model.eval()
-            test_accuracy = evaluate(epoch)
-            suffix = (
-                f'{epoch}_total_steps_{model.total_steps}_'
-                f'testacc_{test_accuracy}')
-            model.save_networks(suffix)
+        model.eval()
+        test_accuracy = evaluate(epoch)
+        suffix = (
+            f'{epoch}_total_steps_{model.total_steps}_'
+            f'testacc_{test_accuracy}')
+        model.save_networks(suffix)
         print(
             f'saving the latest model {opt.name} '
             f'(epoch {epoch}, model.total_steps {model.total_steps})')

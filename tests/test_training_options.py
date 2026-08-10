@@ -9,10 +9,11 @@ class TrainingOptionTests(unittest.TestCase):
         parser = BaseOptions().initialize(argparse.ArgumentParser())
         return parser.parse_args(argv)
 
-    def test_parameter_ema_defaults_to_disabled(self):
+    def test_degradation_consistency_defaults_to_disabled(self):
         args = self.parse([])
 
-        self.assertEqual(args.ema_decay, 0.0)
+        self.assertEqual(args.degradation_consistency_weight, 0.0)
+        self.assertEqual(args.degradation_scale, 0.75)
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.cpd_direction_weight, 0.0)
 
@@ -33,15 +34,16 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertIn('__ds314159__ms42__', name)
 
-    def test_compact_name_records_ema_decay(self):
+    def test_compact_name_records_degradation_consistency(self):
         args = self.parse([
-            '--name', 'c2p_ema',
-            '--ema_decay', '0.99',
+            '--name', 'c2p_dcons',
+            '--degradation_consistency_weight', '1.0',
+            '--degradation_scale', '0.75',
         ])
 
         name = build_experiment_name(args, timestamp='20260809-150000')
 
-        self.assertTrue(name.endswith('__ema-d0.99'))
+        self.assertTrue(name.endswith('__dcons-w1.0-s0.75'))
 
     def test_compact_name_records_retained_gan_objectives(self):
         args = self.parse([

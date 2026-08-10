@@ -45,26 +45,28 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
-    def test_formats_ema_decay_when_active(self):
+    def test_formats_degradation_consistency_when_active(self):
         value = SimpleNamespace(item=lambda: 1.25)
         model = SimpleNamespace(
             loss=value,
             loss_contrastive=value,
             loss_classification=value,
-            ema_decay=0.99,
+            degradation_consistency_weight=1.0,
+            loss_degradation_consistency=value,
             real_logit_mean=value,
             fake_logit_mean=value,
         )
 
         text = format_training_losses(model)
 
-        self.assertIn('ema_decay=0.990000', text)
+        self.assertIn('degradation_consistency=1.250000', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([
                 '--patch_residual_head',
                 '--augmentation_dro_weight=1',
+                '--ema_decay=0.99',
                 '--residual_vib',
                 '--residual_trust_weight=1',
                 '--symmetric_prototype_head',
