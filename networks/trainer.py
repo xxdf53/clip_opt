@@ -188,19 +188,14 @@ class CLIPModel_lora(nn.Module):
             text_embeddings = F.normalize(
                 self.encode_text(input_ids, attention_mask), p=2, dim=-1)
 
+        logits_per_text = (
+            text_embeddings @ image_embeddings.t()
+            * self.model.logit_scale.exp()
+        )
+        contrastive_loss = local_contrastive_loss(logits_per_text.t())
+        outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
         if return_embeddings:
-            outputs = (
-                image_embeddings,
-                text_embeddings,
-                class_logits.squeeze(1),
-            )
-        else:
-            logits_per_text = (
-                text_embeddings @ image_embeddings.t()
-                * self.model.logit_scale.exp()
-            )
-            contrastive_loss = local_contrastive_loss(logits_per_text.t())
-            outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
+            outputs += (image_embeddings, text_embeddings)
         if not return_cpd:
             return outputs
 
@@ -231,7 +226,8 @@ class Trainer(BaseModel):
         self.cpd_start_step = opt.cpd_start_step
         self.cpd_warmup_steps = opt.cpd_warmup_steps
         self.cpd_enabled = cpd_is_enabled(opt)
-        self.global_contrastive = opt.global_contrastive
+        self.global_contrastive_weight = opt.global_contrastive_weight
+        self.global_contrastive = self.global_contrastive_weight > 0
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -349,9 +345,13 @@ class Trainer(BaseModel):
             return_embeddings=self.global_contrastive,
         )
         if self.global_contrastive:
-            self.image_embeddings, self.text_embeddings, self.classhead = (
-                outputs[:3])
-            auxiliary = outputs[3] if len(outputs) == 4 else {}
+            (
+                self.output,
+                self.classhead,
+                self.image_embeddings,
+                self.text_embeddings,
+            ) = outputs[:4]
+            auxiliary = outputs[4] if len(outputs) == 5 else {}
         else:
             self.output, self.classhead = outputs[:2]
             auxiliary = outputs[2] if len(outputs) == 3 else {}
@@ -380,19 +380,23 @@ class Trainer(BaseModel):
         self.update_cpd_schedule(step=self.total_steps + 1)
         self.forward()
 
+        self.loss_local_contrastive = self.output.sum()
+        zero = self.classhead.new_zeros(())
+        self.loss_global_contrastive = zero
         if self.global_contrastive:
-            self.loss_contrastive = global_contrastive_loss(
+            global_loss = global_contrastive_loss(
                 self.image_embeddings,
                 self.text_embeddings,
                 self.model.module.model.logit_scale.exp(),
             )
-        else:
-            self.loss_contrastive = self.output.sum()
+            self.loss_global_contrastive = (
+                self.global_contrastive_weight * global_loss)
+        self.loss_contrastive = (
+            self.loss_local_contrastive + self.loss_global_contrastive)
         self.loss_classification = (
             self.claloss * self.loss_fn(self.classhead, self.label))
         self.loss = self.loss_contrastive + self.loss_classification
 
-        zero = self.classhead.new_zeros(())
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:
             self.loss_anchor = (

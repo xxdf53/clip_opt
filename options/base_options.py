@@ -46,8 +46,9 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
-    if opt.global_contrastive:
-        configuration_parts.append('gcon')
+    if opt.global_contrastive_weight > 0:
+        configuration_parts.append(
+            f'gcon-w{opt.global_contrastive_weight}')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -166,11 +167,12 @@ class BaseOptions:
             help='steps used to linearly ramp CPD to its configured weight',
         )
         parser.add_argument(
-            '--global_contrastive',
-            action='store_true',
+            '--global_contrastive_weight',
+            type=float,
+            default=0.0,
             help=(
-                'gather multi-GPU image/text embeddings before computing one '
-                'full-batch symmetric contrastive loss'
+                'auxiliary weight for a full-batch contrastive loss; the '
+                'original local contrastive loss is always retained'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -232,6 +234,8 @@ class BaseOptions:
             raise ValueError('--cpd_start_step cannot be negative')
         if opt.cpd_warmup_steps < 0:
             raise ValueError('--cpd_warmup_steps cannot be negative')
+        if opt.global_contrastive_weight < 0:
+            raise ValueError('--global_contrastive_weight cannot be negative')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

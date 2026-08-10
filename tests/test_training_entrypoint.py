@@ -52,6 +52,8 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss_contrastive=value,
             loss_classification=value,
             global_contrastive=True,
+            loss_local_contrastive=value,
+            loss_global_contrastive=value,
             image_embeddings=SimpleNamespace(shape=(64, 768)),
             real_logit_mean=value,
             fake_logit_mean=value,

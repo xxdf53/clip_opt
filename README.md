@@ -67,16 +67,17 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-For multi-GPU training, global contrastive mode gathers the aligned image and
-text embeddings from every replica before constructing one full-batch
-similarity matrix. Classification BCE remains unchanged, while the symmetric
-contrastive term uses every sample in the batch as a negative:
+For multi-GPU training, optional global contrastive regularization gathers the
+aligned image and text embeddings from every replica before constructing one
+full-batch similarity matrix. The original local contrastive loss remains the
+main contrastive term; the global loss is only an auxiliary regularizer, so
+classification BCE and inference remain unchanged:
 
 ```bash
-python scripts/train.py [baseline arguments] --global_contrastive
+python scripts/train.py [baseline arguments] --global_contrastive_weight 0.1
 ```
 
-The option is disabled by default, changes neither inference nor checkpoint
+The weight is disabled by default, changes neither inference nor checkpoint
 structure, and supports uneven final batches because only feature matrices are
 gathered across GPUs.
 

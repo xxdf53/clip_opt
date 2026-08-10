@@ -168,7 +168,7 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
 
-    def test_cpd_global_forward_returns_aligned_embeddings(self):
+    def test_cpd_global_forward_keeps_local_loss_and_returns_embeddings(self):
         model = build_minimal_model()
         images = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
         paired_ids = torch.tensor([
@@ -177,7 +177,7 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         ])
         labels = torch.tensor([0.0, 1.0])
 
-        image_embeddings, text_embeddings, logits, auxiliary = model(
+        contrastive, logits, image_embeddings, text_embeddings, auxiliary = model(
             images,
             cpd_input_ids=paired_ids,
             cpd_attention_mask=torch.ones_like(paired_ids),
@@ -186,9 +186,10 @@ class RetainedGanObjectiveTests(unittest.TestCase):
             return_embeddings=True,
         )
 
+        self.assertEqual(contrastive.shape, (1,))
+        self.assertEqual(logits.shape, (2,))
         self.assertEqual(image_embeddings.shape, (2, 2))
         self.assertEqual(text_embeddings.shape, (2, 2))
-        self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
         self.assertTrue(torch.any(auxiliary['image_residual'] != 0))
 

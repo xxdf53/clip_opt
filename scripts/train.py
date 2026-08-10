@@ -145,6 +145,8 @@ def format_training_losses(model):
         )
     if getattr(model, 'global_contrastive', False):
         text += (
+            f' local_contrastive={model.loss_local_contrastive.item():.6f}'
+            f' global_contrastive={model.loss_global_contrastive.item():.6f}'
             f' global_contrastive_batch={model.image_embeddings.shape[0]}'
         )
     return text
