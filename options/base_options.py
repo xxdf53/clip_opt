@@ -46,6 +46,8 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
+    if opt.global_contrastive:
+        configuration_parts.append('gcon')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -162,6 +164,14 @@ class BaseOptions:
             type=int,
             default=0,
             help='steps used to linearly ramp CPD to its configured weight',
+        )
+        parser.add_argument(
+            '--global_contrastive',
+            action='store_true',
+            help=(
+                'gather multi-GPU image/text embeddings before computing one '
+                'full-batch symmetric contrastive loss'
+            ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 

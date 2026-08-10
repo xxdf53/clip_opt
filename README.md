@@ -67,6 +67,19 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
+For multi-GPU training, global contrastive mode gathers the aligned image and
+text embeddings from every replica before constructing one full-batch
+similarity matrix. Classification BCE remains unchanged, while the symmetric
+contrastive term uses every sample in the batch as a negative:
+
+```bash
+python scripts/train.py [baseline arguments] --global_contrastive
+```
+
+The option is disabled by default, changes neither inference nor checkpoint
+structure, and supports uneven final batches because only feature matrices are
+gathered across GPUs.
+
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (GAlC, AGDRO,
 gradient-accumulation emulation, PRH, SPH, RVIB, RTR, EMA and degradation

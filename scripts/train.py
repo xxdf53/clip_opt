@@ -143,6 +143,10 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
+    if getattr(model, 'global_contrastive', False):
+        text += (
+            f' global_contrastive_batch={model.image_embeddings.shape[0]}'
+        )
     return text
 
 

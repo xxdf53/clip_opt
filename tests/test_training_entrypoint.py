@@ -45,6 +45,22 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
+    def test_formats_global_contrastive_batch_size(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            global_contrastive=True,
+            image_embeddings=SimpleNamespace(shape=(64, 768)),
+            real_logit_mean=value,
+            fake_logit_mean=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('global_contrastive_batch=64', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([
