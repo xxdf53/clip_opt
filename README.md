@@ -67,32 +67,10 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-The optional degradation-consistency objective uses the clean image as a
-stop-gradient teacher and trains on a lightly downsampled/restored view. It is
-designed to reduce generator-specific resampling sensitivity without adding
-inference inputs, layers, or checkpoint fields:
-
-```bash
-TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1 \
-python scripts/train.py \
-  --dataroot ./ForenSynths_train_val_19test \
-  --textroot ./prefix_caption \
-  --classes car,cat,chair,horse \
-  --clip ./clip-vit-large-patch14 \
-  --checkpoints_dir ./c2p_checkpoints \
-  --name c2p_degradation_consistency \
-  --gpu_ids 0,1 --batch_size 64 --keep_last_batch --niter 1 \
-  --total_steps 2251 --eval_freq 0 --lr 0.0002 --claloss 8.0 \
-  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8 \
-  --delr 0.9 --delr_freq 10 \
-  --degradation_consistency_weight 1.0 \
-  --degradation_scale 0.75
-```
-
-The objective is disabled by default. Experiment directories use a compact
-name capped at 180 UTF-8 bytes and record all active objectives. Failed
-GenImage paths (GAlC, AGDRO, gradient-accumulation emulation, PRH, SPH, RVIB,
-RTR and EMA) were removed from the active implementation. Their checkpoints
+Experiment directories use a compact name capped at 180 UTF-8 bytes and record
+all active objectives. Failed GenImage paths (GAlC, AGDRO,
+gradient-accumulation emulation, PRH, SPH, RVIB, RTR, EMA and degradation
+consistency) were removed from the active implementation. Their checkpoints
 require an older Git revision when they changed the model structure; baseline,
 SLAR, CPD and standard LoRA checkpoints remain compatible.
 
@@ -138,6 +116,18 @@ python scripts/test_checkpoint.py \
 Both scripts report ACC, real/fake accuracy, AP, AUROC, ECE, Brier score,
 raw-logit class statistics, macro means, and overall metrics. Prediction CSVs
 contain the generator, image path, label, raw logit, and sigmoid score.
+
+Pass multiple compatible checkpoints after one `--checkpoint` flag to evaluate
+each model sequentially and report a uniform raw-logit ensemble without loading
+all models into GPU memory at once:
+
+```bash
+python scripts/test_checkpoint.py \
+  --dataroot ./CNN_synth_testset \
+  --checkpoint ./seed42.pth ./seed123.pth ./seed2024.pth \
+  --clip_path ./clip-vit-large-patch14 \
+  --lora_r 6 --lora_alpha 6 --lora_dropout 0.8
+```
 
 ### Logit distribution analysis for self-trained LoRA checkpoints
 

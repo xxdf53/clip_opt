@@ -27,10 +27,23 @@ class EvaluationCliTests(unittest.TestCase):
         ])
 
         self.assertEqual(args.num_workers, 0)
+        self.assertEqual(args.checkpoint, ['model.pth'])
         self.assertEqual(args.lora_r, 6)
         self.assertEqual(args.lora_alpha, 6)
         self.assertEqual(args.lora_dropout, 0.8)
         self.assertEqual(args.predictions_csv, 'lora.csv')
+
+    def test_lora_cli_accepts_multiple_checkpoints(self):
+        args = test_checkpoint.parse_args([
+            '--dataroot', 'dataset',
+            '--checkpoint', 'seed42.pth', 'seed123.pth', 'seed2024.pth',
+        ])
+
+        self.assertEqual(args.checkpoint, [
+            'seed42.pth',
+            'seed123.pth',
+            'seed2024.pth',
+        ])
 
     def test_forward_adapters_preserve_model_specific_signatures(self):
         images = torch.zeros(2, 3, 4, 4)

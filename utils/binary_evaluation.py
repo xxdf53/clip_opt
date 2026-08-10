@@ -167,8 +167,6 @@ def evaluate_groups(
     transform = transform or build_transform()
 
     predictions = []
-    group_metrics = {}
-    group_logit_stats = {}
     for index, (generator, binary_leaves) in enumerate(groups.items()):
         dataset = build_group_dataset(binary_leaves, transform)
         group_predictions = evaluate_dataset(
@@ -195,11 +193,39 @@ def evaluate_groups(
                 if record['label'] == 1
             ],
         )
-        group_metrics[generator] = metrics
-        group_logit_stats[generator] = logit_stats
         predictions.extend(group_predictions)
         if on_group_complete is not None:
             on_group_complete(index, generator, metrics, logit_stats)
+    return summarize_predictions(predictions)
+
+
+def summarize_predictions(predictions):
+    """Compute the standard summary from ordered prediction records."""
+    if not predictions:
+        raise ValueError('at least one prediction is required')
+
+    grouped = {}
+    for record in predictions:
+        grouped.setdefault(record['generator'], []).append(record)
+
+    group_metrics = {}
+    group_logit_stats = {}
+    for generator, records in grouped.items():
+        labels = [record['label'] for record in records]
+        scores = [record['score'] for record in records]
+        group_metrics[generator] = compute_binary_metrics(labels, scores)
+        group_logit_stats[generator] = compute_logit_stats(
+            [
+                record['raw_logit']
+                for record in records
+                if record['label'] == 0
+            ],
+            [
+                record['raw_logit']
+                for record in records
+                if record['label'] == 1
+            ],
+        )
 
     metric_names = (
         'acc',
@@ -216,9 +242,7 @@ def evaluate_groups(
         ]))
         for name in metric_names
     }
-    macro_metrics['n'] = sum(
-        metrics['n'] for metrics in group_metrics.values())
-
+    macro_metrics['n'] = len(predictions)
     overall_metrics = compute_binary_metrics(
         [record['label'] for record in predictions],
         [record['score'] for record in predictions],
@@ -243,6 +267,42 @@ def evaluate_groups(
         'overall_logit_stats': overall_logit_stats,
         'predictions': predictions,
     }
+
+
+def average_prediction_sets(prediction_sets):
+    """Average aligned raw logits from independently trained models."""
+    if not prediction_sets:
+        raise ValueError('at least one prediction set is required')
+    expected_length = len(prediction_sets[0])
+    if any(len(records) != expected_length for records in prediction_sets):
+        raise ValueError('prediction sets must contain the same images')
+
+    averaged = []
+    identity_fields = ('generator', 'path', 'label')
+    for aligned_records in zip(*prediction_sets):
+        reference = aligned_records[0]
+        if any(
+            any(record[field] != reference[field] for field in identity_fields)
+            for record in aligned_records[1:]
+        ):
+            raise ValueError(
+                'prediction sets must use identical image order and labels')
+        raw_logit = float(np.mean([
+            record['raw_logit'] for record in aligned_records
+        ]))
+        if raw_logit >= 0:
+            score = float(1.0 / (1.0 + np.exp(-raw_logit)))
+        else:
+            exp_logit = np.exp(raw_logit)
+            score = float(exp_logit / (1.0 + exp_logit))
+        averaged.append({
+            'generator': reference['generator'],
+            'path': reference['path'],
+            'label': reference['label'],
+            'raw_logit': raw_logit,
+            'score': score,
+        })
+    return averaged
 
 
 def write_predictions_csv(predictions, output_path):

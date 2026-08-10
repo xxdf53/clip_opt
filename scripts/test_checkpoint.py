@@ -1,4 +1,4 @@
-"""Evaluate a self-trained C2P-CLIP LoRA checkpoint on binary datasets.
+"""Evaluate one or more self-trained C2P-CLIP LoRA checkpoints.
 
 The checkpoint must be produced by scripts/train.py and contain ``model`` and
 ``total_steps``. Evaluation is image-only: captions and text prompts are not
@@ -17,9 +17,11 @@ import torch
 
 from utils.binary_dataset_layout import discover_binary_groups
 from utils.binary_evaluation import (
+    average_prediction_sets,
     evaluate_groups,
     format_diagnostics,
     format_metrics,
+    summarize_predictions,
     write_predictions_csv,
 )
 from utils.checkpoint_loading import load_self_trained_checkpoint
@@ -33,7 +35,15 @@ def parse_args(argv=None):
         required=True,
         help='binary dataset root with direct or nested 0_real/1_fake folders',
     )
-    parser.add_argument('--checkpoint', required=True, help='train.py .pth file')
+    parser.add_argument(
+        '--checkpoint',
+        required=True,
+        nargs='+',
+        help=(
+            'one or more train.py .pth files; multiple checkpoints are '
+            'combined by uniform raw-logit averaging'
+        ),
+    )
     parser.add_argument(
         '--clip_path',
         default=str(ROOT / 'clip-vit-large-patch14'),
@@ -105,51 +115,81 @@ def lora_forward_logits(model, images):
     return model(images, None, None, cla=True)
 
 
-def main(argv=None):
-    args = parse_args(argv)
-    dataroot = resolve_existing_path(
-        args.dataroot, 'dataset root', expect_directory=True)
-    checkpoint = resolve_existing_path(
-        args.checkpoint, 'checkpoint', expect_directory=False)
-    clip_path = resolve_existing_path(
-        args.clip_path, 'CLIP model', expect_directory=True)
-    groups = discover_binary_groups(dataroot)
-    device = resolve_device(args.gpu)
-
-    model = load_checkpoint(
-        checkpoint_path=checkpoint,
-        clip_path=clip_path,
-        lora_r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        device=device,
-    )
-
-    print(f'Dataset: {dataroot}')
-    print(f'Generators: {len(groups)}')
-    print(f'Device: {device}')
-    print(f'Model: {checkpoint}')
-    start_time = time.time()
-    print('\n' + '=' * 92)
-    summary = evaluate_groups(
-        groups,
-        forward_logits=lambda images: lora_forward_logits(model, images),
-        device=device,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        on_group_complete=lambda index, name, metrics, stats: (
-            print(f'[{index:02d}] ' + format_metrics(name, metrics)),
-            print('     ' + format_diagnostics(metrics, stats)),
-        ),
-    )
-    elapsed = time.time() - start_time
-
-    print('=' * 92)
+def print_aggregate_summary(summary):
     print('     ' + format_metrics('Macro mean', summary['macro_metrics']))
     print('     ' + format_diagnostics(summary['macro_metrics']))
     print('     ' + format_metrics('Overall', summary['overall_metrics']))
     print('     ' + format_diagnostics(
         summary['overall_metrics'], summary['overall_logit_stats']))
+
+
+def print_group_summary(summary):
+    for index, generator in enumerate(summary['group_metrics']):
+        metrics = summary['group_metrics'][generator]
+        stats = summary['group_logit_stats'][generator]
+        print(f'[{index:02d}] ' + format_metrics(generator, metrics))
+        print('     ' + format_diagnostics(metrics, stats))
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    dataroot = resolve_existing_path(
+        args.dataroot, 'dataset root', expect_directory=True)
+    checkpoints = [
+        resolve_existing_path(path, 'checkpoint', expect_directory=False)
+        for path in args.checkpoint
+    ]
+    clip_path = resolve_existing_path(
+        args.clip_path, 'CLIP model', expect_directory=True)
+    groups = discover_binary_groups(dataroot)
+    device = resolve_device(args.gpu)
+
+    print(f'Dataset: {dataroot}')
+    print(f'Generators: {len(groups)}')
+    print(f'Device: {device}')
+    print(f'Checkpoints: {len(checkpoints)}')
+    start_time = time.time()
+    prediction_sets = []
+    summary = None
+    for model_index, checkpoint in enumerate(checkpoints, start=1):
+        print('\n' + '=' * 92)
+        print(f'Model {model_index}/{len(checkpoints)}: {checkpoint}')
+        model = load_checkpoint(
+            checkpoint_path=checkpoint,
+            clip_path=clip_path,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            device=device,
+        )
+        summary = evaluate_groups(
+            groups,
+            forward_logits=lambda images: lora_forward_logits(model, images),
+            device=device,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            on_group_complete=lambda index, name, metrics, stats: (
+                print(f'[{index:02d}] ' + format_metrics(name, metrics)),
+                print('     ' + format_diagnostics(metrics, stats)),
+            ),
+        )
+        print('-' * 92)
+        print_aggregate_summary(summary)
+        prediction_sets.append(summary['predictions'])
+        del model
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+
+    if len(prediction_sets) > 1:
+        ensemble_predictions = average_prediction_sets(prediction_sets)
+        summary = summarize_predictions(ensemble_predictions)
+        print('\n' + '=' * 92)
+        print('Uniform raw-logit ensemble')
+        print_group_summary(summary)
+        print('-' * 92)
+        print_aggregate_summary(summary)
+
+    elapsed = time.time() - start_time
     if args.predictions_csv:
         output_path = write_predictions_csv(
             summary['predictions'], args.predictions_csv)

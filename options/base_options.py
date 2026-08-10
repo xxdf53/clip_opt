@@ -46,12 +46,6 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
-    if opt.degradation_consistency_weight > 0:
-        configuration_parts.append(
-            f'dcons-w{opt.degradation_consistency_weight}-'
-            f's{opt.degradation_scale}'
-        )
-
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -169,21 +163,6 @@ class BaseOptions:
             default=0,
             help='steps used to linearly ramp CPD to its configured weight',
         )
-        parser.add_argument(
-            '--degradation_consistency_weight',
-            type=float,
-            default=0.0,
-            help=(
-                'weight of training-only clean/resampled logit consistency; '
-                'zero disables it'
-            ),
-        )
-        parser.add_argument(
-            '--degradation_scale',
-            type=float,
-            default=0.75,
-            help='relative downsampling scale for consistency training',
-        )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True
@@ -243,11 +222,6 @@ class BaseOptions:
             raise ValueError('--cpd_start_step cannot be negative')
         if opt.cpd_warmup_steps < 0:
             raise ValueError('--cpd_warmup_steps cannot be negative')
-        if opt.degradation_consistency_weight < 0:
-            raise ValueError(
-                '--degradation_consistency_weight cannot be negative')
-        if not 0 < opt.degradation_scale <= 1:
-            raise ValueError('--degradation_scale must be in (0, 1]')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

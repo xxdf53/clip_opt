@@ -7,11 +7,13 @@ import torch
 from PIL import Image
 
 from utils.binary_evaluation import (
+    average_prediction_sets,
     build_group_dataset,
     build_transform,
     evaluate_groups,
     format_diagnostics,
     format_metrics,
+    summarize_predictions,
     write_predictions_csv,
 )
 
@@ -160,6 +162,48 @@ class BinaryEvaluationTests(unittest.TestCase):
             self.assertEqual(rows[0]['generator'], 'biggan')
             self.assertEqual(rows[0]['label'], '0')
             self.assertEqual(rows[0]['raw_logit'], '-1.25')
+
+    def test_averages_aligned_raw_logits_and_recomputes_metrics(self):
+        first = [
+            {
+                'generator': 'g', 'path': '/real.png', 'label': 0,
+                'raw_logit': -2.0, 'score': 0.1,
+            },
+            {
+                'generator': 'g', 'path': '/fake.png', 'label': 1,
+                'raw_logit': 1.0, 'score': 0.7,
+            },
+        ]
+        second = [
+            {
+                'generator': 'g', 'path': '/real.png', 'label': 0,
+                'raw_logit': 0.0, 'score': 0.5,
+            },
+            {
+                'generator': 'g', 'path': '/fake.png', 'label': 1,
+                'raw_logit': 3.0, 'score': 0.9,
+            },
+        ]
+
+        averaged = average_prediction_sets([first, second])
+        summary = summarize_predictions(averaged)
+
+        self.assertEqual(
+            [record['raw_logit'] for record in averaged], [-1.0, 2.0])
+        self.assertEqual(summary['overall_metrics']['acc'], 100.0)
+
+    def test_rejects_misaligned_prediction_sets(self):
+        first = [{
+            'generator': 'g', 'path': '/a.png', 'label': 0,
+            'raw_logit': -1.0, 'score': 0.25,
+        }]
+        second = [{
+            'generator': 'g', 'path': '/b.png', 'label': 0,
+            'raw_logit': -1.0, 'score': 0.25,
+        }]
+
+        with self.assertRaisesRegex(ValueError, 'identical image order'):
+            average_prediction_sets([first, second])
 
 
 if __name__ == '__main__':

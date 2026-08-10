@@ -27,6 +27,8 @@ from scripts.validate import validate
 
 RETIRED_TRAINING_FLAGS = {
     '--augmentation_dro_weight',
+    '--degradation_consistency_weight',
+    '--degradation_scale',
     '--ema_decay',
     '--gradient_accumulation_steps',
     '--gate_loss_weight',
@@ -140,11 +142,6 @@ def format_training_losses(model):
             f' cpd_projection={model.cpd_signed_projection.item():.6f}'
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
-        )
-    if getattr(model, 'degradation_consistency_weight', 0.0) > 0:
-        text += (
-            ' degradation_consistency='
-            f'{model.loss_degradation_consistency.item():.6f}'
         )
     return text
 
