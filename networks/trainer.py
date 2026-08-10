@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,12 +8,12 @@ from transformers import CLIPModel
 
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
+from utils.parameter_ema import TrainableParameterEMA
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
-    residual_trust_region_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -130,7 +132,6 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
-        return_image_residual=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         image_embeddings = F.normalize(
@@ -180,7 +181,7 @@ class CLIPModel_lora(nn.Module):
         )
         contrastive_loss = local_contrastive_loss(logits_per_text.t())
         outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
-        if not return_cpd and not return_image_residual:
+        if not return_cpd:
             return outputs
 
         with torch.no_grad():
@@ -190,8 +191,7 @@ class CLIPModel_lora(nn.Module):
                 dim=-1,
             )
         image_residual = image_embeddings - frozen_embeddings.detach()
-        if return_cpd or return_image_residual:
-            auxiliary['image_residual'] = image_residual
+        auxiliary['image_residual'] = image_residual
         return outputs + (auxiliary,)
 
 
@@ -215,7 +215,7 @@ class Trainer(BaseModel):
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
         self.cpd_active = False
-        self.residual_trust_weight = opt.residual_trust_weight
+        self.ema_decay = opt.ema_decay
         self.model = CLIPModel_lora(
             name=opt.clip,
             lora_r=opt.lora_r,
@@ -272,6 +272,11 @@ class Trainer(BaseModel):
             self.model,
             device_ids=opt.gpu_ids,
         ).cuda()
+        self.parameter_ema = (
+            TrainableParameterEMA(self.ema_decay)
+            if self.ema_decay > 0
+            else None
+        )
 
     def adjust_learning_rate(self, min_lr=1e-6):
         previous_lr = self.optimizer.param_groups[0]['lr']
@@ -326,14 +331,11 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
-            return_image_residual=self.residual_trust_weight > 0,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
         if self.cpd_active:
             self.cpd_components = auxiliary
-        if self.residual_trust_weight > 0:
-            self.image_residual = auxiliary['image_residual']
 
     def update_cpd_schedule(self, step=None):
         """Update the delayed CPD weights for one optimizer step."""
@@ -418,14 +420,6 @@ class Trainer(BaseModel):
         for name, value in diagnostics.items():
             setattr(self, name, value)
 
-        self.loss_residual_trust = zero
-        if self.residual_trust_weight > 0:
-            self.loss_residual_trust = (
-                self.residual_trust_weight
-                * residual_trust_region_loss(self.image_residual)
-            )
-            self.loss = self.loss + self.loss_residual_trust
-
         anchor_diagnostics = symmetric_logit_anchor_diagnostics(
             self.classhead,
             self.label,
@@ -436,4 +430,15 @@ class Trainer(BaseModel):
 
         self.loss.backward()
         self.optimizer.step()
+        if self.parameter_ema is not None:
+            self.parameter_ema.update(self.model.module)
         self.total_steps += 1
+
+    @contextmanager
+    def ema_scope(self):
+        """Use averaged weights for evaluation and checkpoint saving."""
+        if self.parameter_ema is None:
+            yield
+            return
+        with self.parameter_ema.average_parameters(self.model.module):
+            yield

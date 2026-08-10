@@ -45,21 +45,20 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
-    def test_formats_residual_trust_loss_when_active(self):
+    def test_formats_ema_decay_when_active(self):
         value = SimpleNamespace(item=lambda: 1.25)
         model = SimpleNamespace(
             loss=value,
             loss_contrastive=value,
             loss_classification=value,
-            loss_residual_trust=value,
-            residual_trust_weight=1.0,
+            ema_decay=0.99,
             real_logit_mean=value,
             fake_logit_mean=value,
         )
 
         text = format_training_losses(model)
 
-        self.assertIn('residual_trust=1.250000', text)
+        self.assertIn('ema_decay=0.990000', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
@@ -67,6 +66,7 @@ class TrainingEntrypointTests(unittest.TestCase):
                 '--patch_residual_head',
                 '--augmentation_dro_weight=1',
                 '--residual_vib',
+                '--residual_trust_weight=1',
                 '--symmetric_prototype_head',
             ])
 

@@ -9,10 +9,10 @@ class TrainingOptionTests(unittest.TestCase):
         parser = BaseOptions().initialize(argparse.ArgumentParser())
         return parser.parse_args(argv)
 
-    def test_residual_trust_defaults_to_disabled(self):
+    def test_parameter_ema_defaults_to_disabled(self):
         args = self.parse([])
 
-        self.assertEqual(args.residual_trust_weight, 0.0)
+        self.assertEqual(args.ema_decay, 0.0)
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.cpd_direction_weight, 0.0)
 
@@ -33,15 +33,15 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertIn('__ds314159__ms42__', name)
 
-    def test_compact_name_records_residual_trust_weight(self):
+    def test_compact_name_records_ema_decay(self):
         args = self.parse([
-            '--name', 'c2p_rtr',
-            '--residual_trust_weight', '1.0',
+            '--name', 'c2p_ema',
+            '--ema_decay', '0.99',
         ])
 
         name = build_experiment_name(args, timestamp='20260809-150000')
 
-        self.assertTrue(name.endswith('__rtr-w1.0'))
+        self.assertTrue(name.endswith('__ema-d0.99'))
 
     def test_compact_name_records_retained_gan_objectives(self):
         args = self.parse([

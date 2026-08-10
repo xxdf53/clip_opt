@@ -76,13 +76,6 @@ def cpd_diagnostics(
     }
 
 
-def residual_trust_region_loss(image_residual):
-    """Limit normalized LoRA feature drift from the frozen CLIP encoder."""
-    if image_residual.ndim != 2:
-        raise ValueError('image_residual must have shape [batch, features]')
-    return image_residual.square().sum(dim=-1).mean()
-
-
 def _flatten_binary_inputs(logits, labels):
     logits = logits.flatten()
     labels = labels.flatten().to(dtype=logits.dtype)

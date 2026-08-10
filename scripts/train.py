@@ -48,6 +48,7 @@ RETIRED_TRAINING_FLAGS = {
     '--rank_loss_weight',
     '--residual_alpha',
     '--residual_scale',
+    '--residual_trust_weight',
     '--residual_vib',
     '--symmetric_prototype_head',
     '--use_local_features',
@@ -139,8 +140,8 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if getattr(model, 'residual_trust_weight', 0.0) > 0:
-        text += f' residual_trust={model.loss_residual_trust.item():.6f}'
+    if getattr(model, 'ema_decay', 0.0) > 0:
+        text += f' ema_decay={model.ema_decay:.6f}'
     return text
 
 
@@ -206,12 +207,13 @@ def main():
         return round(mean_accuracy, 4)
 
     def evaluate_and_save(epoch):
-        model.eval()
-        test_accuracy = evaluate(epoch)
-        suffix = (
-            f'{epoch}_total_steps_{model.total_steps}_'
-            f'testacc_{test_accuracy}')
-        model.save_networks(suffix)
+        with model.ema_scope():
+            model.eval()
+            test_accuracy = evaluate(epoch)
+            suffix = (
+                f'{epoch}_total_steps_{model.total_steps}_'
+                f'testacc_{test_accuracy}')
+            model.save_networks(suffix)
         print(
             f'saving the latest model {opt.name} '
             f'(epoch {epoch}, model.total_steps {model.total_steps})')

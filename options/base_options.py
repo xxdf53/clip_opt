@@ -46,9 +46,8 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
-    if opt.residual_trust_weight > 0:
-        configuration_parts.append(
-            f'rtr-w{opt.residual_trust_weight}')
+    if opt.ema_decay > 0:
+        configuration_parts.append(f'ema-d{opt.ema_decay}')
 
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -168,12 +167,12 @@ class BaseOptions:
             help='steps used to linearly ramp CPD to its configured weight',
         )
         parser.add_argument(
-            '--residual_trust_weight',
+            '--ema_decay',
             type=float,
             default=0.0,
             help=(
-                'weight of the training-only normalized feature distance '
-                'between LoRA and frozen CLIP encoders'
+                'EMA decay for trainable LoRA and classifier parameters; '
+                'zero disables EMA'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -235,8 +234,8 @@ class BaseOptions:
             raise ValueError('--cpd_start_step cannot be negative')
         if opt.cpd_warmup_steps < 0:
             raise ValueError('--cpd_warmup_steps cannot be negative')
-        if opt.residual_trust_weight < 0:
-            raise ValueError('--residual_trust_weight cannot be negative')
+        if opt.ema_decay < 0 or opt.ema_decay >= 1:
+            raise ValueError('--ema_decay must be in [0, 1)')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:
