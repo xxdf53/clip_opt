@@ -67,25 +67,22 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Class-Midpoint Boundary Centering (CMBC) is an optional training-only loss for
-fixed-threshold stability. It keeps the midpoint between the real and fake
-batch-logit means near zero while leaving their separation and individual
-logit magnitudes unconstrained:
+Semantic Residual Orthogonality (SRO) is an experimental training-only loss.
+It compares LoRA-adapted and frozen CLIP image features, penalizing only the
+adaptation component parallel to the frozen feature. The classifier, checkpoint
+structure, and image-only inference path are unchanged:
 
 ```bash
-python scripts/train.py [baseline arguments] --boundary_center_weight 0.5
+python scripts/train.py [baseline arguments] --semantic_residual_weight 0.1
 ```
 
-CMBC is disabled by default and changes neither inference inputs nor checkpoint
-structure. It is intentionally weaker than SLAR, which instead anchors every
-sample to a fixed absolute logit target.
-
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
-all active objectives. Failed GenImage paths (global contrastive, GAlC, AGDRO,
-gradient-accumulation emulation, PRH, SPH, RVIB, RTR, EMA and degradation
-consistency) were removed from the active implementation. Their checkpoints
-require an older Git revision when they changed the model structure; baseline,
-SLAR, CPD and standard LoRA checkpoints remain compatible.
+all active objectives. Failed GenImage paths (global contrastive, class-midpoint
+boundary centering, GAlC, AGDRO, gradient-accumulation emulation, PRH, SPH,
+RVIB, RTR, EMA and degradation consistency) were removed from the active
+implementation. Their checkpoints require an older Git revision when they
+changed the model structure; baseline, SLAR, CPD and standard LoRA checkpoints
+remain compatible.
 
 ### 2) Inference / Testing
 

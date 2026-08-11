@@ -22,9 +22,9 @@ from utils.cpd import (
     cpd_schedule_scale,
 )
 from utils.training_objectives import (
-    class_midpoint_center_diagnostics,
-    class_midpoint_center_loss,
     cpd_direction_loss,
+    semantic_residual_diagnostics,
+    semantic_residual_orthogonality_loss,
     symmetric_logit_anchor_loss,
 )
 
@@ -89,24 +89,29 @@ class RetainedGanObjectiveTests(unittest.TestCase):
             self.assertEqual(loss.ndim, 0)
             self.assertTrue(torch.isfinite(loss))
 
-    def test_midpoint_center_loss_only_penalizes_boundary_shift(self):
-        labels = torch.tensor([0.0, 0.0, 1.0, 1.0])
-        centered = torch.tensor([-3.0, -1.0, 1.0, 3.0])
-        shifted = torch.tensor([-4.0, -2.0, 0.0, 2.0], requires_grad=True)
-
-        self.assertEqual(class_midpoint_center_loss(centered, labels).item(), 0.0)
-        loss = class_midpoint_center_loss(shifted, labels)
-        loss.backward()
-
-        self.assertEqual(loss.item(), 1.0)
-        self.assertTrue(torch.all(shifted.grad < 0))
-        diagnostics = class_midpoint_center_diagnostics(shifted, labels)
-        self.assertEqual(diagnostics['logit_midpoint'].item(), -1.0)
-
     def test_cpd_schedule_delays_and_warms_up(self):
         self.assertEqual(cpd_schedule_scale(400, 400, 400), 0.0)
         self.assertEqual(cpd_schedule_scale(600, 400, 400), 0.5)
         self.assertEqual(cpd_schedule_scale(800, 400, 400), 1.0)
+
+    def test_semantic_residual_loss_rejects_parallel_not_orthogonal_updates(self):
+        frozen = torch.tensor([[2.0, 0.0], [0.0, 3.0]])
+        adapted_parallel = torch.tensor(
+            [[3.0, 0.0], [0.0, 5.0]], requires_grad=True)
+        adapted_orthogonal = torch.tensor([[2.0, 4.0], [5.0, 3.0]])
+
+        parallel_loss = semantic_residual_orthogonality_loss(
+            adapted_parallel, frozen)
+        orthogonal_loss = semantic_residual_orthogonality_loss(
+            adapted_orthogonal, frozen)
+        parallel_loss.backward()
+
+        self.assertGreater(parallel_loss.item(), 0.0)
+        self.assertEqual(orthogonal_loss.item(), 0.0)
+        self.assertIsNotNone(adapted_parallel.grad)
+        diagnostics = semantic_residual_diagnostics(
+            adapted_parallel, frozen)
+        self.assertGreater(diagnostics['semantic_residual_parallel'].item(), 0.0)
 
     def test_counterfactual_text_order_matches_binary_labels(self):
         pair = build_counterfactual_captions(
@@ -167,6 +172,23 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(contrastive.shape, (1,))
         self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
+
+    def test_semantic_residual_forward_returns_only_image_features(self):
+        model = build_minimal_model()
+        images = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        token_ids = torch.tensor([[1, 1], [-1, 1]])
+
+        contrastive, logits, auxiliary = model(
+            images,
+            input_ids=token_ids,
+            attention_mask=torch.ones_like(token_ids),
+            return_semantic_residual=True,
+        )
+
+        self.assertEqual(contrastive.shape, (1,))
+        self.assertEqual(logits.shape, (2,))
+        self.assertEqual(auxiliary['adapted_image_features'].shape, (2, 2))
+        self.assertEqual(auxiliary['frozen_image_features'].shape, (2, 2))
 
     def test_cpd_and_slar_losses_favor_correct_separation(self):
         residual = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])

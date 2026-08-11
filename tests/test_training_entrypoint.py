@@ -45,23 +45,24 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
-    def test_formats_boundary_center_diagnostics(self):
+    def test_formats_semantic_residual_diagnostics(self):
         value = SimpleNamespace(item=lambda: 1.25)
         model = SimpleNamespace(
             loss=value,
             loss_contrastive=value,
             loss_classification=value,
-            boundary_center_weight=0.5,
-            loss_boundary_center=value,
-            logit_midpoint=value,
             real_logit_mean=value,
             fake_logit_mean=value,
+            semantic_residual_enabled=True,
+            loss_semantic_residual=value,
+            semantic_residual_parallel=value,
+            semantic_residual_norm=value,
         )
 
         text = format_training_losses(model)
 
-        self.assertIn('boundary_center=1.250000', text)
-        self.assertIn('logit_midpoint=1.250000', text)
+        self.assertIn('sro=1.250000', text)
+        self.assertIn('sro_parallel=1.250000', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
@@ -75,6 +76,7 @@ class TrainingEntrypointTests(unittest.TestCase):
                 '--residual_trust_weight=1',
                 '--symmetric_prototype_head',
                 '--global_contrastive_weight=0.1',
+                '--boundary_center_weight=0.5',
             ])
 
 
