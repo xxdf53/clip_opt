@@ -84,6 +84,29 @@ def _flatten_binary_inputs(logits, labels):
     return logits, labels
 
 
+def class_midpoint_center_loss(logits, labels):
+    """Keep the real/fake batch-logit midpoint at the fixed threshold zero."""
+    logits, labels = _flatten_binary_inputs(logits, labels)
+    real_logits = logits[labels < 0.5]
+    fake_logits = logits[labels >= 0.5]
+    if real_logits.numel() == 0 or fake_logits.numel() == 0:
+        return logits.sum() * 0.0
+    midpoint = 0.5 * (real_logits.mean() + fake_logits.mean())
+    return midpoint.square()
+
+
+def class_midpoint_center_diagnostics(logits, labels):
+    """Return the detached real/fake midpoint used by CMBC."""
+    logits, labels = _flatten_binary_inputs(logits.detach(), labels)
+    real_logits = logits[labels < 0.5]
+    fake_logits = logits[labels >= 0.5]
+    if real_logits.numel() == 0 or fake_logits.numel() == 0:
+        midpoint = logits.new_tensor(float('nan'))
+    else:
+        midpoint = 0.5 * (real_logits.mean() + fake_logits.mean())
+    return {'logit_midpoint': midpoint}
+
+
 def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):
     """Keep real/fake logits near fixed symmetric targets around zero."""
     if anchor <= 0:

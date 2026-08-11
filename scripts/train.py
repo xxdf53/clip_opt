@@ -37,6 +37,8 @@ RETIRED_TRAINING_FLAGS = {
     '--init_baseline_checkpoint',
     '--freeze_global_branch',
     '--freeze_vision_lora',
+    '--global_contrastive',
+    '--global_contrastive_weight',
     '--local_candidate_loss_weight',
     '--local_dim',
     '--local_dropout',
@@ -143,11 +145,10 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if getattr(model, 'global_contrastive', False):
+    if getattr(model, 'boundary_center_weight', 0.0) > 0:
         text += (
-            f' local_contrastive={model.loss_local_contrastive.item():.6f}'
-            f' global_contrastive={model.loss_global_contrastive.item():.6f}'
-            f' global_contrastive_batch={model.image_embeddings.shape[0]}'
+            f' boundary_center={model.loss_boundary_center.item():.6f}'
+            f' logit_midpoint={model.logit_midpoint.item():.6f}'
         )
     return text
 

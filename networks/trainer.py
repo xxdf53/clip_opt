@@ -7,6 +7,8 @@ from transformers import CLIPModel
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
 from utils.training_objectives import (
+    class_midpoint_center_diagnostics,
+    class_midpoint_center_loss,
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
@@ -24,21 +26,6 @@ def local_contrastive_loss(logits):
     caption_loss = F.cross_entropy(logits, targets)
     image_loss = F.cross_entropy(logits.t(), targets)
     return 0.5 * (caption_loss + image_loss)
-
-
-def global_contrastive_loss(
-    image_embeddings,
-    text_embeddings,
-    logit_scale,
-):
-    """Compute symmetric CLIP loss after gathering the complete batch."""
-    if image_embeddings.ndim != 2 or text_embeddings.ndim != 2:
-        raise ValueError('image and text embeddings must be matrices')
-    if image_embeddings.shape != text_embeddings.shape:
-        raise ValueError('image and text embeddings must have the same shape')
-    logits_per_image = (
-        image_embeddings @ text_embeddings.t() * logit_scale)
-    return local_contrastive_loss(logits_per_image)
 
 
 class CLIPModel_lora(nn.Module):
@@ -144,7 +131,6 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
-        return_embeddings=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         image_embeddings = F.normalize(
@@ -194,8 +180,6 @@ class CLIPModel_lora(nn.Module):
         )
         contrastive_loss = local_contrastive_loss(logits_per_text.t())
         outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
-        if return_embeddings:
-            outputs += (image_embeddings, text_embeddings)
         if not return_cpd:
             return outputs
 
@@ -226,8 +210,7 @@ class Trainer(BaseModel):
         self.cpd_start_step = opt.cpd_start_step
         self.cpd_warmup_steps = opt.cpd_warmup_steps
         self.cpd_enabled = cpd_is_enabled(opt)
-        self.global_contrastive_weight = opt.global_contrastive_weight
-        self.global_contrastive = self.global_contrastive_weight > 0
+        self.boundary_center_weight = opt.boundary_center_weight
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -342,19 +325,9 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
-            return_embeddings=self.global_contrastive,
         )
-        if self.global_contrastive:
-            (
-                self.output,
-                self.classhead,
-                self.image_embeddings,
-                self.text_embeddings,
-            ) = outputs[:4]
-            auxiliary = outputs[4] if len(outputs) == 5 else {}
-        else:
-            self.output, self.classhead = outputs[:2]
-            auxiliary = outputs[2] if len(outputs) == 3 else {}
+        self.output, self.classhead = outputs[:2]
+        auxiliary = outputs[2] if len(outputs) == 3 else {}
         if self.cpd_active:
             self.cpd_components = auxiliary
 
@@ -380,22 +353,19 @@ class Trainer(BaseModel):
         self.update_cpd_schedule(step=self.total_steps + 1)
         self.forward()
 
-        self.loss_local_contrastive = self.output.sum()
+        self.loss_contrastive = self.output.sum()
         zero = self.classhead.new_zeros(())
-        self.loss_global_contrastive = zero
-        if self.global_contrastive:
-            global_loss = global_contrastive_loss(
-                self.image_embeddings,
-                self.text_embeddings,
-                self.model.module.model.logit_scale.exp(),
-            )
-            self.loss_global_contrastive = (
-                self.global_contrastive_weight * global_loss)
-        self.loss_contrastive = (
-            self.loss_local_contrastive + self.loss_global_contrastive)
         self.loss_classification = (
             self.claloss * self.loss_fn(self.classhead, self.label))
         self.loss = self.loss_contrastive + self.loss_classification
+
+        self.loss_boundary_center = zero
+        if self.boundary_center_weight > 0:
+            self.loss_boundary_center = (
+                self.boundary_center_weight
+                * class_midpoint_center_loss(self.classhead, self.label)
+            )
+            self.loss = self.loss + self.loss_boundary_center
 
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:
@@ -458,6 +428,12 @@ class Trainer(BaseModel):
             anchor=self.logit_anchor,
         )
         for name, value in anchor_diagnostics.items():
+            setattr(self, name, value)
+        midpoint_diagnostics = class_midpoint_center_diagnostics(
+            self.classhead,
+            self.label,
+        )
+        for name, value in midpoint_diagnostics.items():
             setattr(self, name, value)
 
         self.loss.backward()

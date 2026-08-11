@@ -13,7 +13,6 @@ from data.datasets import ImageFolder2
 from networks.trainer import (
     CLIPModel_lora,
     Trainer,
-    global_contrastive_loss,
     local_contrastive_loss,
 )
 from utils.captions import build_label_caption
@@ -23,6 +22,8 @@ from utils.cpd import (
     cpd_schedule_scale,
 )
 from utils.training_objectives import (
+    class_midpoint_center_diagnostics,
+    class_midpoint_center_loss,
     cpd_direction_loss,
     symmetric_logit_anchor_loss,
 )
@@ -88,20 +89,19 @@ class RetainedGanObjectiveTests(unittest.TestCase):
             self.assertEqual(loss.ndim, 0)
             self.assertTrue(torch.isfinite(loss))
 
-    def test_global_contrastive_loss_uses_the_complete_gathered_batch(self):
-        image_parts = [torch.randn(20, 8), torch.randn(22, 8)]
-        text_parts = [torch.randn(20, 8), torch.randn(22, 8)]
-        images = torch.cat(image_parts).requires_grad_()
-        texts = torch.cat(text_parts).requires_grad_()
+    def test_midpoint_center_loss_only_penalizes_boundary_shift(self):
+        labels = torch.tensor([0.0, 0.0, 1.0, 1.0])
+        centered = torch.tensor([-3.0, -1.0, 1.0, 3.0])
+        shifted = torch.tensor([-4.0, -2.0, 0.0, 2.0], requires_grad=True)
 
-        loss = global_contrastive_loss(images, texts, logit_scale=1.0)
+        self.assertEqual(class_midpoint_center_loss(centered, labels).item(), 0.0)
+        loss = class_midpoint_center_loss(shifted, labels)
         loss.backward()
 
-        self.assertEqual(images.shape[0], 42)
-        self.assertEqual(loss.ndim, 0)
-        self.assertTrue(torch.isfinite(loss))
-        self.assertIsNotNone(images.grad)
-        self.assertIsNotNone(texts.grad)
+        self.assertEqual(loss.item(), 1.0)
+        self.assertTrue(torch.all(shifted.grad < 0))
+        diagnostics = class_midpoint_center_diagnostics(shifted, labels)
+        self.assertEqual(diagnostics['logit_midpoint'].item(), -1.0)
 
     def test_cpd_schedule_delays_and_warms_up(self):
         self.assertEqual(cpd_schedule_scale(400, 400, 400), 0.0)
@@ -167,31 +167,6 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(contrastive.shape, (1,))
         self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
-
-    def test_cpd_global_forward_keeps_local_loss_and_returns_embeddings(self):
-        model = build_minimal_model()
-        images = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
-        paired_ids = torch.tensor([
-            [[1, 1], [-1, 1]],
-            [[1, 1], [-1, 1]],
-        ])
-        labels = torch.tensor([0.0, 1.0])
-
-        contrastive, logits, image_embeddings, text_embeddings, auxiliary = model(
-            images,
-            cpd_input_ids=paired_ids,
-            cpd_attention_mask=torch.ones_like(paired_ids),
-            labels=labels,
-            return_cpd=True,
-            return_embeddings=True,
-        )
-
-        self.assertEqual(contrastive.shape, (1,))
-        self.assertEqual(logits.shape, (2,))
-        self.assertEqual(image_embeddings.shape, (2, 2))
-        self.assertEqual(text_embeddings.shape, (2, 2))
-        self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
-        self.assertTrue(torch.any(auxiliary['image_residual'] != 0))
 
     def test_cpd_and_slar_losses_favor_correct_separation(self):
         residual = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])

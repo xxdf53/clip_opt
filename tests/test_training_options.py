@@ -14,7 +14,7 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.cpd_direction_weight, 0.0)
-        self.assertEqual(args.global_contrastive_weight, 0.0)
+        self.assertEqual(args.boundary_center_weight, 0.0)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -48,15 +48,15 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertIn('__anchor-w0.5-t3.0__', name)
         self.assertIn('__cpd-d0.5-c0.0-m0.1-s400-w400', name)
 
-    def test_compact_name_records_global_contrastive_training(self):
+    def test_compact_name_records_boundary_center_training(self):
         args = self.parse([
-            '--name', 'global_batch',
-            '--global_contrastive_weight', '0.1',
+            '--name', 'boundary_center',
+            '--boundary_center_weight', '0.5',
         ])
 
         name = build_experiment_name(args, timestamp='20260810-120000')
 
-        self.assertTrue(name.endswith('__gcon-w0.1'))
+        self.assertTrue(name.endswith('__bcenter-w0.5'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])
