@@ -40,6 +40,7 @@ RETIRED_TRAINING_FLAGS = {
     '--global_contrastive',
     '--global_contrastive_weight',
     '--boundary_center_weight',
+    '--semantic_residual_weight',
     '--local_candidate_loss_weight',
     '--local_dim',
     '--local_dropout',
@@ -146,11 +147,12 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if getattr(model, 'semantic_residual_enabled', False):
+    if getattr(model, 'spectral_band_dropout', 0.0) > 0:
         text += (
-            f' sro={model.loss_semantic_residual.item():.6f}'
-            f' sro_parallel={model.semantic_residual_parallel.item():.6f}'
-            f' sro_norm={model.semantic_residual_norm.item():.6f}'
+            f' sbd_probability={model.spectral_band_dropout:.2f}'
+            f' sbd_applied={model.spectral_band_applied.item():.6f}'
+            f' sbd_mask_fraction='
+            f'{model.spectral_band_mask_fraction.item():.6f}'
         )
     return text
 

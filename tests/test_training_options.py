@@ -14,7 +14,7 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.cpd_direction_weight, 0.0)
-        self.assertEqual(args.semantic_residual_weight, 0.0)
+        self.assertEqual(args.spectral_band_dropout, 0.0)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -48,15 +48,15 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertIn('__anchor-w0.5-t3.0__', name)
         self.assertIn('__cpd-d0.5-c0.0-m0.1-s400-w400', name)
 
-    def test_compact_name_records_semantic_residual_training(self):
+    def test_compact_name_records_spectral_band_dropout(self):
         args = self.parse([
-            '--name', 'semantic_residual',
-            '--semantic_residual_weight', '0.1',
+            '--name', 'spectral_band_dropout',
+            '--spectral_band_dropout', '0.25',
         ])
 
         name = build_experiment_name(args, timestamp='20260811-180000')
 
-        self.assertTrue(name.endswith('__sro-w0.1'))
+        self.assertTrue(name.endswith('__sbd-p0.25'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])

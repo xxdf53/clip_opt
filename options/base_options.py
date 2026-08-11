@@ -46,8 +46,8 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
-    if opt.semantic_residual_weight > 0:
-        configuration_parts.append(f'sro-w{opt.semantic_residual_weight}')
+    if opt.spectral_band_dropout > 0:
+        configuration_parts.append(f'sbd-p{opt.spectral_band_dropout}')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -166,12 +166,12 @@ class BaseOptions:
             help='steps used to linearly ramp CPD to its configured weight',
         )
         parser.add_argument(
-            '--semantic_residual_weight',
+            '--spectral_band_dropout',
             type=float,
             default=0.0,
             help=(
-                'weight of frozen-semantic residual orthogonality; '
-                'the adapted visual feature remains image-only at inference'
+                'probability of training-only random radial frequency-band '
+                'dropout; inference remains image-only and unchanged'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -233,8 +233,8 @@ class BaseOptions:
             raise ValueError('--cpd_start_step cannot be negative')
         if opt.cpd_warmup_steps < 0:
             raise ValueError('--cpd_warmup_steps cannot be negative')
-        if opt.semantic_residual_weight < 0:
-            raise ValueError('--semantic_residual_weight cannot be negative')
+        if not 0 <= opt.spectral_band_dropout <= 1:
+            raise ValueError('--spectral_band_dropout must be in [0, 1]')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

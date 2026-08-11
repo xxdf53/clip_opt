@@ -76,49 +76,6 @@ def cpd_diagnostics(
     }
 
 
-def semantic_residual_orthogonality_loss(
-    adapted_features,
-    frozen_features,
-):
-    """Keep LoRA updates orthogonal to each image's frozen CLIP feature.
-
-    This preserves the frozen feature's semantic direction without limiting
-    the magnitude of an orthogonal, potentially forensic, adaptation.
-    """
-    _validate_feature_pair(
-        adapted_features,
-        frozen_features,
-        'adapted/frozen image features',
-    )
-    frozen_direction = F.normalize(
-        frozen_features.detach(),
-        p=2,
-        dim=-1,
-    )
-    residual = adapted_features - frozen_features.detach()
-    parallel_projection = (residual * frozen_direction).sum(dim=-1)
-    return parallel_projection.square().mean()
-
-
-def semantic_residual_diagnostics(adapted_features, frozen_features):
-    """Return detached magnitudes for the semantic-residual constraint."""
-    _validate_feature_pair(
-        adapted_features,
-        frozen_features,
-        'adapted/frozen image features',
-    )
-    adapted_features = adapted_features.detach()
-    frozen_features = frozen_features.detach()
-    frozen_direction = F.normalize(frozen_features, p=2, dim=-1)
-    residual = adapted_features - frozen_features
-    parallel_projection = (residual * frozen_direction).sum(dim=-1)
-    residual_norm = residual.norm(p=2, dim=-1)
-    return {
-        'semantic_residual_parallel': parallel_projection.abs().mean(),
-        'semantic_residual_norm': residual_norm.mean(),
-    }
-
-
 def _flatten_binary_inputs(logits, labels):
     logits = logits.flatten()
     labels = labels.flatten().to(dtype=logits.dtype)

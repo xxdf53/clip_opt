@@ -11,11 +11,10 @@ from utils.training_objectives import (
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
-    semantic_residual_diagnostics,
-    semantic_residual_orthogonality_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
+from utils.spectral_augmentation import spectral_band_dropout
 
 
 def local_contrastive_loss(logits):
@@ -131,12 +130,7 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
-        return_semantic_residual=False,
     ):
-        frozen_features = None
-        if return_semantic_residual and not return_cpd:
-            with torch.no_grad():
-                frozen_features = self.encode_image(images, disable_lora=True)
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
             vision_outputs.pooler_output)
@@ -187,19 +181,14 @@ class CLIPModel_lora(nn.Module):
         )
         contrastive_loss = local_contrastive_loss(logits_per_text.t())
         outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
-        if not return_cpd and not return_semantic_residual:
+        if not return_cpd:
             return outputs
 
-        if frozen_features is None:
-            with torch.no_grad():
-                frozen_features = self.encode_image(images, disable_lora=True)
-        if return_cpd:
-            frozen_embeddings = F.normalize(frozen_features, p=2, dim=-1)
-            auxiliary['image_residual'] = (
-                image_embeddings - frozen_embeddings.detach())
-        if return_semantic_residual:
-            auxiliary['adapted_image_features'] = adapted_features
-            auxiliary['frozen_image_features'] = frozen_features.detach()
+        with torch.no_grad():
+            frozen_features = self.encode_image(images, disable_lora=True)
+        frozen_embeddings = F.normalize(frozen_features, p=2, dim=-1)
+        auxiliary['image_residual'] = (
+            image_embeddings - frozen_embeddings.detach())
         return outputs + (auxiliary,)
 
 
@@ -219,8 +208,7 @@ class Trainer(BaseModel):
         self.cpd_start_step = opt.cpd_start_step
         self.cpd_warmup_steps = opt.cpd_warmup_steps
         self.cpd_enabled = cpd_is_enabled(opt)
-        self.semantic_residual_weight = opt.semantic_residual_weight
-        self.semantic_residual_enabled = self.semantic_residual_weight > 0
+        self.spectral_band_dropout = opt.spectral_band_dropout
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -305,6 +293,15 @@ class Trainer(BaseModel):
 
     def set_input(self, batch):
         self.input = batch[1].cuda()
+        self.spectral_band_applied = self.input.new_zeros(())
+        self.spectral_band_mask_fraction = self.input.new_zeros(())
+        if self.spectral_band_dropout > 0:
+            self.input, spectral_diagnostics = spectral_band_dropout(
+                self.input,
+                probability=self.spectral_band_dropout,
+            )
+            for name, value in spectral_diagnostics.items():
+                setattr(self, name, value)
         self.label = batch[5].cuda().float()
         token_ids = self._to_cuda(batch[3])
         token_attention_mask = self._to_cuda(batch[4])
@@ -335,11 +332,10 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
-            return_semantic_residual=self.semantic_residual_enabled,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
-        if self.cpd_active or self.semantic_residual_enabled:
+        if self.cpd_active:
             self.auxiliary_components = auxiliary
 
     def update_cpd_schedule(self, step=None):
@@ -369,32 +365,6 @@ class Trainer(BaseModel):
         self.loss_classification = (
             self.claloss * self.loss_fn(self.classhead, self.label))
         self.loss = self.loss_contrastive + self.loss_classification
-
-        self.loss_semantic_residual = zero
-        if self.semantic_residual_enabled:
-            adapted_features = self.auxiliary_components[
-                'adapted_image_features']
-            frozen_features = self.auxiliary_components[
-                'frozen_image_features']
-            self.loss_semantic_residual = (
-                self.semantic_residual_weight
-                * semantic_residual_orthogonality_loss(
-                    adapted_features,
-                    frozen_features,
-                )
-            )
-            self.loss = self.loss + self.loss_semantic_residual
-            semantic_diagnostics = semantic_residual_diagnostics(
-                adapted_features,
-                frozen_features,
-            )
-        else:
-            semantic_diagnostics = {
-                'semantic_residual_parallel': zero,
-                'semantic_residual_norm': zero,
-            }
-        for name, value in semantic_diagnostics.items():
-            setattr(self, name, value)
 
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:

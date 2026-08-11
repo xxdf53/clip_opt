@@ -23,10 +23,9 @@ from utils.cpd import (
 )
 from utils.training_objectives import (
     cpd_direction_loss,
-    semantic_residual_diagnostics,
-    semantic_residual_orthogonality_loss,
     symmetric_logit_anchor_loss,
 )
+from utils.spectral_augmentation import spectral_band_dropout
 
 
 class FakeTokenizer:
@@ -94,24 +93,20 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(cpd_schedule_scale(600, 400, 400), 0.5)
         self.assertEqual(cpd_schedule_scale(800, 400, 400), 1.0)
 
-    def test_semantic_residual_loss_rejects_parallel_not_orthogonal_updates(self):
-        frozen = torch.tensor([[2.0, 0.0], [0.0, 3.0]])
-        adapted_parallel = torch.tensor(
-            [[3.0, 0.0], [0.0, 5.0]], requires_grad=True)
-        adapted_orthogonal = torch.tensor([[2.0, 4.0], [5.0, 3.0]])
+    def test_spectral_band_dropout_is_training_only_and_preserves_shape(self):
+        images = torch.randn(3, 3, 16, 16)
+        unchanged, disabled = spectral_band_dropout(images, probability=0.0)
+        self.assertTrue(torch.equal(unchanged, images))
+        self.assertEqual(disabled['spectral_band_applied'].item(), 0.0)
 
-        parallel_loss = semantic_residual_orthogonality_loss(
-            adapted_parallel, frozen)
-        orthogonal_loss = semantic_residual_orthogonality_loss(
-            adapted_orthogonal, frozen)
-        parallel_loss.backward()
-
-        self.assertGreater(parallel_loss.item(), 0.0)
-        self.assertEqual(orthogonal_loss.item(), 0.0)
-        self.assertIsNotNone(adapted_parallel.grad)
-        diagnostics = semantic_residual_diagnostics(
-            adapted_parallel, frozen)
-        self.assertGreater(diagnostics['semantic_residual_parallel'].item(), 0.0)
+        torch.manual_seed(7)
+        augmented, diagnostics = spectral_band_dropout(images, probability=1.0)
+        self.assertEqual(augmented.shape, images.shape)
+        self.assertEqual(augmented.dtype, images.dtype)
+        self.assertTrue(torch.isfinite(augmented).all())
+        self.assertGreater(diagnostics['spectral_band_applied'].item(), 0.0)
+        self.assertGreater(diagnostics['spectral_band_mask_fraction'].item(), 0.0)
+        self.assertFalse(torch.equal(augmented, images))
 
     def test_counterfactual_text_order_matches_binary_labels(self):
         pair = build_counterfactual_captions(
@@ -172,23 +167,6 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(contrastive.shape, (1,))
         self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
-
-    def test_semantic_residual_forward_returns_only_image_features(self):
-        model = build_minimal_model()
-        images = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
-        token_ids = torch.tensor([[1, 1], [-1, 1]])
-
-        contrastive, logits, auxiliary = model(
-            images,
-            input_ids=token_ids,
-            attention_mask=torch.ones_like(token_ids),
-            return_semantic_residual=True,
-        )
-
-        self.assertEqual(contrastive.shape, (1,))
-        self.assertEqual(logits.shape, (2,))
-        self.assertEqual(auxiliary['adapted_image_features'].shape, (2, 2))
-        self.assertEqual(auxiliary['frozen_image_features'].shape, (2, 2))
 
     def test_cpd_and_slar_losses_favor_correct_separation(self):
         residual = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])

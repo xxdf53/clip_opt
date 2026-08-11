@@ -67,22 +67,23 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Semantic Residual Orthogonality (SRO) is an experimental training-only loss.
-It compares LoRA-adapted and frozen CLIP image features, penalizing only the
-adaptation component parallel to the frozen feature. The classifier, checkpoint
-structure, and image-only inference path are unchanged:
+Spectral Band Dropout (SBD) is an experimental training-only augmentation. For
+a selected image it masks one narrow, non-DC radial Fourier band while keeping
+the original label and C2P-CLIP losses. This discourages dependence on an SD
+v1.4-specific frequency band; the classifier, checkpoint structure, and
+image-only inference path are unchanged:
 
 ```bash
-python scripts/train.py [baseline arguments] --semantic_residual_weight 0.1
+python scripts/train.py [baseline arguments] --spectral_band_dropout 0.25
 ```
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
-boundary centering, GAlC, AGDRO, gradient-accumulation emulation, PRH, SPH,
-RVIB, RTR, EMA and degradation consistency) were removed from the active
-implementation. Their checkpoints require an older Git revision when they
-changed the model structure; baseline, SLAR, CPD and standard LoRA checkpoints
-remain compatible.
+boundary centering, semantic residual orthogonality, GAlC, AGDRO,
+gradient-accumulation emulation, PRH, SPH, RVIB, RTR, EMA and degradation
+consistency) were removed from the active implementation. Their checkpoints
+require an older Git revision when they changed the model structure; baseline,
+SLAR, CPD and standard LoRA checkpoints remain compatible.
 
 ### 2) Inference / Testing
 
