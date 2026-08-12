@@ -25,7 +25,6 @@ from utils.training_objectives import (
     cpd_direction_loss,
     symmetric_logit_anchor_loss,
 )
-from utils.spectral_augmentation import spectral_band_dropout
 
 
 class FakeTokenizer:
@@ -72,6 +71,7 @@ def build_minimal_model():
     model.model.logit_scale = nn.Parameter(
         torch.tensor(0.0), requires_grad=False)
     model.model.fc = nn.Linear(2, 1)
+    model.rrsd = None
     def encode_text(self, input_ids, attention_mask):
         del attention_mask
         return input_ids.to(dtype=torch.float32)
@@ -92,21 +92,6 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(cpd_schedule_scale(400, 400, 400), 0.0)
         self.assertEqual(cpd_schedule_scale(600, 400, 400), 0.5)
         self.assertEqual(cpd_schedule_scale(800, 400, 400), 1.0)
-
-    def test_spectral_band_dropout_is_training_only_and_preserves_shape(self):
-        images = torch.randn(3, 3, 16, 16)
-        unchanged, disabled = spectral_band_dropout(images, probability=0.0)
-        self.assertTrue(torch.equal(unchanged, images))
-        self.assertEqual(disabled['spectral_band_applied'].item(), 0.0)
-
-        torch.manual_seed(7)
-        augmented, diagnostics = spectral_band_dropout(images, probability=1.0)
-        self.assertEqual(augmented.shape, images.shape)
-        self.assertEqual(augmented.dtype, images.dtype)
-        self.assertTrue(torch.isfinite(augmented).all())
-        self.assertGreater(diagnostics['spectral_band_applied'].item(), 0.0)
-        self.assertGreater(diagnostics['spectral_band_mask_fraction'].item(), 0.0)
-        self.assertFalse(torch.equal(augmented, images))
 
     def test_counterfactual_text_order_matches_binary_labels(self):
         pair = build_counterfactual_captions(

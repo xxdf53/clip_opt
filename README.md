@@ -67,19 +67,24 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Spectral Band Dropout (SBD) is an experimental training-only augmentation. For
-a selected image it masks one narrow, non-DC radial Fourier band while keeping
-the original label and C2P-CLIP losses. This discourages dependence on an SD
-v1.4-specific frequency band; the classifier, checkpoint structure, and
-image-only inference path are unchanged:
+Real-Reference Radial Spectral Deviation (RRSD) keeps the original C2P-CLIP
+classifier and adds a small bounded logit residual. It extracts a 16-bin radial
+log-power descriptor from the same image and compares it with a running
+prototype computed only from real training images. The residual starts exactly
+at zero, and the real prototype is updated from globally aggregated samples
+after each multi-GPU optimizer step:
 
 ```bash
-python scripts/train.py [baseline arguments] --spectral_band_dropout 0.25
+python scripts/train.py [baseline arguments] --rrsd_max_correction 0.5
 ```
+
+RRSD inference remains image-only: the saved real prototype is used without
+labels, captions, prompts, external models, or test-time adaptation. A value of
+zero disables RRSD and preserves the baseline checkpoint structure.
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
-boundary centering, semantic residual orthogonality, GAlC, AGDRO,
+boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
 gradient-accumulation emulation, PRH, SPH, RVIB, RTR, EMA and degradation
 consistency) were removed from the active implementation. Their checkpoints
 require an older Git revision when they changed the model structure; baseline,
