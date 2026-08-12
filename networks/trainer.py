@@ -5,16 +5,13 @@ from peft import LoraConfig, get_peft_model
 from transformers import CLIPModel
 
 from networks.base_model import BaseModel
-from networks.rrsd import (
-    RealReferenceSpectralResidual,
-    radial_log_power_features,
-)
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
+    hard_fake_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -40,7 +37,6 @@ class CLIPModel_lora(nn.Module):
         lora_r=16,
         lora_alpha=32,
         lora_dropout=0.05,
-        rrsd_max_correction=0.0,
     ):
         super().__init__()
         self.model = CLIPModel.from_pretrained(name)
@@ -66,10 +62,6 @@ class CLIPModel_lora(nn.Module):
         self.model.fc = nn.Linear(projection_dim, num_classes)
         nn.init.normal_(self.model.fc.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.model.fc.bias)
-        self.rrsd = None
-        if rrsd_max_correction > 0:
-            self.rrsd = RealReferenceSpectralResidual(
-                max_delta=rrsd_max_correction)
 
     def encode_text(self, input_ids, attention_mask):
         text_outputs = self.model.text_model(
@@ -138,7 +130,6 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
-        return_rrsd_stats=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
@@ -149,33 +140,10 @@ class CLIPModel_lora(nn.Module):
             dim=-1,
         )
         class_logits = self.model.fc(image_embeddings)
-        spectral_features = None
-        spectral_correction = class_logits.new_zeros(
-            class_logits.shape[0])
-        spectral_deviation = spectral_correction
-        if self.rrsd is not None:
-            with torch.no_grad():
-                spectral_features = radial_log_power_features(images)
-            spectral_correction, spectral_deviation = self.rrsd(
-                spectral_features)
-            class_logits = class_logits + spectral_correction.unsqueeze(1)
         if cla:
             return class_logits
 
         auxiliary = {}
-        if return_rrsd_stats:
-            if self.rrsd is None:
-                raise ValueError('RRSD statistics requested while disabled')
-            if labels is None:
-                raise ValueError('labels are required for RRSD training')
-            real_mask = labels.flatten() < 0.5
-            real_features = spectral_features[real_mask]
-            auxiliary['rrsd_real_sum'] = real_features.sum(
-                dim=0, keepdim=True)
-            auxiliary['rrsd_real_count'] = real_mask.sum().to(
-                spectral_features.dtype).reshape(1)
-            auxiliary['rrsd_correction'] = spectral_correction
-            auxiliary['rrsd_deviation'] = spectral_deviation
         if return_cpd:
             if cpd_input_ids is None or cpd_attention_mask is None:
                 raise ValueError('counterfactual prompts are required for CPD')
@@ -213,7 +181,7 @@ class CLIPModel_lora(nn.Module):
         )
         contrastive_loss = local_contrastive_loss(logits_per_text.t())
         outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
-        if not return_cpd and not return_rrsd_stats:
+        if not return_cpd:
             return outputs
 
         if return_cpd:
@@ -241,7 +209,9 @@ class Trainer(BaseModel):
         self.cpd_start_step = opt.cpd_start_step
         self.cpd_warmup_steps = opt.cpd_warmup_steps
         self.cpd_enabled = cpd_is_enabled(opt)
-        self.rrsd_enabled = opt.rrsd_max_correction > 0
+        self.hard_fake_loss_weight = opt.hard_fake_loss_weight
+        self.hard_fake_fraction = opt.hard_fake_fraction
+        self.hard_fake_enabled = self.hard_fake_loss_weight > 0
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -251,7 +221,6 @@ class Trainer(BaseModel):
             lora_r=opt.lora_r,
             lora_alpha=opt.lora_alpha,
             lora_dropout=opt.lora_dropout,
-            rrsd_max_correction=opt.rrsd_max_correction,
         )
 
         parameter_count = sum(
@@ -357,49 +326,11 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
-            return_rrsd_stats=self.rrsd_enabled,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
-        if self.cpd_active or self.rrsd_enabled:
+        if self.cpd_active:
             self.auxiliary_components = auxiliary
-
-    @staticmethod
-    def _class_mean(values, labels, target):
-        selected = values[labels == target]
-        if selected.numel() == 0:
-            return values.new_zeros(())
-        return selected.mean().detach()
-
-    def _set_rrsd_diagnostics(self, zero):
-        if not self.rrsd_enabled:
-            self.rrsd_correction_real = zero
-            self.rrsd_correction_fake = zero
-            self.rrsd_deviation_real = zero
-            self.rrsd_deviation_fake = zero
-            self.rrsd_real_count = zero
-            return
-
-        labels = self.label.flatten()
-        correction = self.auxiliary_components['rrsd_correction']
-        deviation = self.auxiliary_components['rrsd_deviation']
-        self.rrsd_correction_real = self._class_mean(
-            correction, labels, 0)
-        self.rrsd_correction_fake = self._class_mean(
-            correction, labels, 1)
-        self.rrsd_deviation_real = self._class_mean(
-            deviation, labels, 0)
-        self.rrsd_deviation_fake = self._class_mean(
-            deviation, labels, 1)
-
-    @torch.no_grad()
-    def _update_rrsd_reference(self):
-        if not self.rrsd_enabled:
-            return
-        real_sum = self.auxiliary_components['rrsd_real_sum'].sum(dim=0)
-        real_count = self.auxiliary_components['rrsd_real_count'].sum()
-        self.model.module.rrsd.update_real_prototype(real_sum, real_count)
-        self.rrsd_real_count = self.model.module.rrsd.real_count.detach()
 
     def update_cpd_schedule(self, step=None):
         """Update the delayed CPD weights for one optimizer step."""
@@ -428,6 +359,24 @@ class Trainer(BaseModel):
         self.loss_classification = (
             self.claloss * self.loss_fn(self.classhead, self.label))
         self.loss = self.loss_contrastive + self.loss_classification
+
+        self.loss_hard_fake = zero
+        if self.hard_fake_enabled:
+            hard_fake_loss, hard_fake_diagnostics = (
+                hard_fake_reweighting_loss(
+                    self.classhead,
+                    self.label,
+                    fraction=self.hard_fake_fraction,
+                )
+            )
+            self.loss_hard_fake = (
+                self.claloss
+                * self.hard_fake_loss_weight
+                * hard_fake_loss
+            )
+            self.loss = self.loss + self.loss_hard_fake
+            for name, value in hard_fake_diagnostics.items():
+                setattr(self, name, value)
 
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:
@@ -491,8 +440,6 @@ class Trainer(BaseModel):
         )
         for name, value in anchor_diagnostics.items():
             setattr(self, name, value)
-        self._set_rrsd_diagnostics(zero)
         self.loss.backward()
         self.optimizer.step()
-        self._update_rrsd_reference()
         self.total_steps += 1

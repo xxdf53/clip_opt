@@ -45,7 +45,7 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
-    def test_formats_rrsd_diagnostics(self):
+    def test_formats_hard_fake_diagnostics(self):
         value = SimpleNamespace(item=lambda: 1.25)
         model = SimpleNamespace(
             loss=value,
@@ -53,19 +53,18 @@ class TrainingEntrypointTests(unittest.TestCase):
             loss_classification=value,
             real_logit_mean=value,
             fake_logit_mean=value,
-            rrsd_enabled=True,
-            rrsd_correction_real=value,
-            rrsd_correction_fake=value,
-            rrsd_deviation_real=value,
-            rrsd_deviation_fake=value,
-            rrsd_real_count=value,
+            hard_fake_enabled=True,
+            loss_hard_fake=value,
+            hard_fake_selected=value,
+            hard_fake_total=value,
+            hard_fake_logit_mean=value,
         )
 
         text = format_training_losses(model)
 
-        self.assertIn('rrsd_correction_real=1.250000', text)
-        self.assertIn('rrsd_deviation_fake=1.250000', text)
-        self.assertIn('rrsd_real_count=1', text)
+        self.assertIn('hard_fake=1.250000', text)
+        self.assertIn('hard_fake_selected=1', text)
+        self.assertIn('hard_fake_total=1', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
@@ -82,6 +81,7 @@ class TrainingEntrypointTests(unittest.TestCase):
                 '--boundary_center_weight=0.5',
                 '--semantic_residual_weight=0.1',
                 '--spectral_band_dropout=0.25',
+                '--rrsd_max_correction=0.5',
             ])
 
 

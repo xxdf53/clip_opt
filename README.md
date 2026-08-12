@@ -67,28 +67,27 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Real-Reference Radial Spectral Deviation (RRSD) keeps the original C2P-CLIP
-classifier and adds a small bounded logit residual. It extracts a 16-bin radial
-log-power descriptor from the same image and compares it with a running
-prototype computed only from real training images. The residual starts exactly
-at zero, and the real prototype is updated from globally aggregated samples
-after each multi-GPU optimizer step:
+Hard-Fake Reweighting (HFR) is an optional training-only objective for the
+diffusion protocol. After multi-GPU logits are gathered, it selects the lowest
+logit quarter of fake samples and adds their BCE once more. The original BCE
+over every sample is unchanged, and a selected sample has exactly twice its
+baseline classification weight when the HFR weight is one:
 
 ```bash
-python scripts/train.py [baseline arguments] --rrsd_max_correction 0.5
+python scripts/train.py [baseline arguments] \
+  --hard_fake_loss_weight 1.0 --hard_fake_fraction 0.25
 ```
 
-RRSD inference remains image-only: the saved real prototype is used without
-labels, captions, prompts, external models, or test-time adaptation. A value of
-zero disables RRSD and preserves the baseline checkpoint structure.
+HFR adds no model parameters and is disabled by default. Checkpoints and
+image-only inference therefore remain identical to the baseline architecture.
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
-gradient-accumulation emulation, PRH, SPH, RVIB, RTR, EMA and degradation
+gradient-accumulation emulation, PRH, SPH, RVIB, RTR, RRSD, EMA and degradation
 consistency) were removed from the active implementation. Their checkpoints
 require an older Git revision when they changed the model structure; baseline,
-SLAR, CPD and standard LoRA checkpoints remain compatible.
+HFR, SLAR, CPD and standard LoRA checkpoints remain compatible.
 
 ### 2) Inference / Testing
 

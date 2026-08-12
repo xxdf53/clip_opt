@@ -58,6 +58,7 @@ RETIRED_TRAINING_FLAGS = {
     '--residual_scale',
     '--residual_trust_weight',
     '--residual_vib',
+    '--rrsd_max_correction',
     '--symmetric_prototype_head',
     '--use_local_features',
     '--vib_beta',
@@ -148,17 +149,13 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if getattr(model, 'rrsd_enabled', False):
+    if getattr(model, 'hard_fake_enabled', False):
         text += (
-            f' rrsd_correction_real='
-            f'{model.rrsd_correction_real.item():.6f}'
-            f' rrsd_correction_fake='
-            f'{model.rrsd_correction_fake.item():.6f}'
-            f' rrsd_deviation_real='
-            f'{model.rrsd_deviation_real.item():.6f}'
-            f' rrsd_deviation_fake='
-            f'{model.rrsd_deviation_fake.item():.6f}'
-            f' rrsd_real_count={model.rrsd_real_count.item():.0f}'
+            f' hard_fake={model.loss_hard_fake.item():.6f}'
+            f' hard_fake_selected={model.hard_fake_selected.item():.0f}'
+            f' hard_fake_total={model.hard_fake_total.item():.0f}'
+            f' hard_fake_logit_mean='
+            f'{model.hard_fake_logit_mean.item():.6f}'
         )
     return text
 
