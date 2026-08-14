@@ -85,21 +85,23 @@ def _flatten_binary_inputs(logits, labels):
 
 
 def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
-    """Return a bias-neutral loss for the lowest-logit fake samples.
+    """Return a real-compensated loss for the lowest-logit fake samples.
 
     The forward value is the selected fake BCE normalized by the full batch
-    size. During backward, the global logit mean is removed and restored as a
-    detached value. This keeps the auxiliary gradient's common mode at zero,
-    so HFR cannot update the classifier bias while still raising hard fake
-    logits relative to the rest of the batch.
+    size. During backward, the real-logit mean is removed and restored as a
+    detached value. The selected fake gradient is therefore compensated only
+    through real samples. Its common mode remains zero, while unselected fake
+    samples receive no auxiliary gradient.
     """
     if not 0 < fraction < 1:
         raise ValueError(f'hard-fake fraction must be in (0, 1), got {fraction}')
 
     logits, labels = _flatten_binary_inputs(logits, labels)
+    real_indices = torch.nonzero(labels < 0.5, as_tuple=False).flatten()
     fake_indices = torch.nonzero(labels >= 0.5, as_tuple=False).flatten()
     fake_count = fake_indices.numel()
-    selected_count = int(fraction * fake_count)
+    selected_count = (
+        int(fraction * fake_count) if real_indices.numel() > 0 else 0)
     zero = logits.sum() * 0.0
     diagnostics = {
         'hard_fake_selected': logits.new_tensor(float(selected_count)),
@@ -117,10 +119,10 @@ def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
         sorted=False,
     ).indices
     selected_indices = fake_indices[selected_within_fake]
-    mean_logit = logits.mean()
-    bias_neutral_logits = logits - mean_logit + mean_logit.detach()
+    real_mean = logits[real_indices].mean()
+    real_compensated_logits = logits - real_mean + real_mean.detach()
     per_sample = F.binary_cross_entropy_with_logits(
-        bias_neutral_logits,
+        real_compensated_logits,
         labels,
         reduction='none',
     )

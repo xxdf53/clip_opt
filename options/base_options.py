@@ -171,7 +171,7 @@ class BaseOptions:
             type=float,
             default=0.0,
             help=(
-                'bias-neutral auxiliary BCE weight for the globally '
+                'real-compensated auxiliary BCE weight for the globally '
                 'lowest-logit fake samples; 0 disables hard-fake reweighting'
             ),
         )

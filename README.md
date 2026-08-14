@@ -67,12 +67,12 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Bias-neutral Hard-Fake Reweighting (HFR) is an optional training-only objective
-for the diffusion protocol. After multi-GPU logits are gathered, it selects the
-lowest-logit quarter of fake samples and adds their BCE once more. Its backward
-pass removes the global common-mode logit gradient, preventing the auxiliary
-loss from shifting the classifier bias toward fake. The original BCE over every
-sample remains unchanged:
+Real-compensated Hard-Fake Reweighting (HFR) is an optional training-only
+objective for the diffusion protocol. After multi-GPU logits are gathered, it
+selects the lowest-logit quarter of fake samples and adds their BCE once more.
+Its backward pass routes the compensating gradient only through real samples,
+preventing a classifier-bias shift without pushing unselected fake logits down.
+The original BCE over every sample remains unchanged:
 
 ```bash
 python scripts/train.py [baseline arguments] \
