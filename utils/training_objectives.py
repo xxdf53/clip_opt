@@ -84,19 +84,87 @@ def _flatten_binary_inputs(logits, labels):
     return logits, labels
 
 
-def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
-    """Return a bias-neutral loss for the lowest-logit fake samples.
+def _semantic_coverage_selection(
+    fake_logits,
+    fake_embeddings,
+    selected_count,
+):
+    """Select hard fake samples with greedy semantic coverage."""
+    candidate_count = min(fake_logits.numel(), 2 * selected_count)
+    candidate_indices = torch.topk(
+        fake_logits.detach(),
+        k=candidate_count,
+        largest=False,
+        sorted=True,
+    ).indices
+    candidate_embeddings = F.normalize(
+        fake_embeddings.detach()[candidate_indices],
+        p=2,
+        dim=-1,
+    )
+
+    selected_positions = [0]
+    selected_mask = torch.zeros(
+        candidate_count,
+        dtype=torch.bool,
+        device=fake_logits.device,
+    )
+    selected_mask[0] = True
+    minimum_distances = 1.0 - (
+        candidate_embeddings @ candidate_embeddings[0])
+
+    while len(selected_positions) < selected_count:
+        minimum_distances[selected_mask] = -1.0
+        next_position = int(torch.argmax(minimum_distances).item())
+        selected_positions.append(next_position)
+        selected_mask[next_position] = True
+        next_distances = 1.0 - (
+            candidate_embeddings @ candidate_embeddings[next_position])
+        minimum_distances = torch.minimum(
+            minimum_distances,
+            next_distances,
+        )
+
+    positions = torch.tensor(
+        selected_positions,
+        dtype=torch.long,
+        device=fake_logits.device,
+    )
+    selected_embeddings = candidate_embeddings[positions]
+    if selected_count > 1:
+        semantic_spread = torch.pdist(selected_embeddings, p=2).mean()
+    else:
+        semantic_spread = fake_logits.new_zeros(())
+    return candidate_indices[positions], candidate_count, semantic_spread
+
+
+def hard_fake_reweighting_loss(
+    logits,
+    labels,
+    fraction=0.25,
+    semantic_embeddings=None,
+):
+    """Return a bias-neutral loss for selected hard fake samples.
 
     The forward value is the selected fake BCE normalized by the full batch
     size. During backward, the global logit mean is removed and restored as a
     detached value. This keeps the auxiliary gradient's common mode at zero,
     so HFR cannot directly update the classifier bias while still raising hard
-    fake logits relative to the rest of the batch.
+    fake logits relative to the rest of the batch. Optional frozen semantic
+    embeddings diversify selection within a candidate pool twice as large as
+    the requested subset.
     """
     if not 0 < fraction < 1:
         raise ValueError(f'hard-fake fraction must be in (0, 1), got {fraction}')
 
     logits, labels = _flatten_binary_inputs(logits, labels)
+    if semantic_embeddings is not None:
+        if semantic_embeddings.ndim != 2:
+            raise ValueError(
+                'semantic embeddings must have shape [batch, features]')
+        if semantic_embeddings.shape[0] != logits.numel():
+            raise ValueError(
+                'semantic embeddings must match the global logit batch')
     fake_indices = torch.nonzero(labels >= 0.5, as_tuple=False).flatten()
     fake_count = fake_indices.numel()
     selected_count = int(fraction * fake_count)
@@ -105,17 +173,31 @@ def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
         'hard_fake_selected': logits.new_tensor(float(selected_count)),
         'hard_fake_total': logits.new_tensor(float(fake_count)),
         'hard_fake_logit_mean': logits.new_zeros(()),
+        'hard_fake_candidates': logits.new_zeros(()),
+        'hard_fake_semantic_spread': logits.new_zeros(()),
     }
     if selected_count == 0:
         return zero, diagnostics
 
     fake_logits = logits[fake_indices]
-    selected_within_fake = torch.topk(
-        fake_logits.detach(),
-        k=selected_count,
-        largest=False,
-        sorted=False,
-    ).indices
+    if semantic_embeddings is None:
+        selected_within_fake = torch.topk(
+            fake_logits.detach(),
+            k=selected_count,
+            largest=False,
+            sorted=False,
+        ).indices
+    else:
+        selected_within_fake, candidate_count, semantic_spread = (
+            _semantic_coverage_selection(
+                fake_logits,
+                semantic_embeddings[fake_indices],
+                selected_count,
+            )
+        )
+        diagnostics['hard_fake_candidates'] = logits.new_tensor(
+            float(candidate_count))
+        diagnostics['hard_fake_semantic_spread'] = semantic_spread
     selected_indices = fake_indices[selected_within_fake]
     mean_logit = logits.mean()
     bias_neutral_logits = logits - mean_logit + mean_logit.detach()

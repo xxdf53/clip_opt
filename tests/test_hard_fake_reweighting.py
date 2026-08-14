@@ -52,6 +52,51 @@ class HardFakeReweightingTests(unittest.TestCase):
         for index in (0, 2, 3):
             self.assertGreater(logits.grad[index].item(), 0.0)
 
+    def test_semantic_coverage_diversifies_hard_candidate_selection(self):
+        logits = torch.tensor(
+            [0.0, 0.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0],
+            requires_grad=True,
+        )
+        labels = torch.tensor([0.0, 0.0] + [1.0] * 8)
+        semantic_embeddings = torch.tensor([
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [0.99, 0.01],
+            [0.0, 1.0],
+            [-1.0, 0.0],
+            [0.5, 0.5],
+            [0.4, 0.6],
+            [0.3, 0.7],
+            [0.2, 0.8],
+        ])
+
+        loss, diagnostics = hard_fake_reweighting_loss(
+            logits,
+            labels,
+            fraction=0.25,
+            semantic_embeddings=semantic_embeddings,
+        )
+        loss.backward()
+
+        self.assertLess(logits.grad[2].item(), 0.0)
+        self.assertLess(logits.grad[5].item(), 0.0)
+        self.assertGreater(logits.grad[3].item(), 0.0)
+        self.assertAlmostEqual(logits.grad.sum().item(), 0.0, places=7)
+        self.assertEqual(diagnostics['hard_fake_selected'].item(), 2)
+        self.assertEqual(diagnostics['hard_fake_candidates'].item(), 4)
+        self.assertAlmostEqual(
+            diagnostics['hard_fake_semantic_spread'].item(), 2.0)
+
+    def test_semantic_embeddings_must_match_global_batch(self):
+        with self.assertRaisesRegex(ValueError, 'global logit batch'):
+            hard_fake_reweighting_loss(
+                torch.zeros(4),
+                torch.tensor([0.0, 1.0, 0.0, 1.0]),
+                fraction=0.5,
+                semantic_embeddings=torch.zeros(3, 2),
+            )
+
     def test_no_fake_or_too_few_fake_samples_returns_safe_zero(self):
         for labels in (
             torch.zeros(4),

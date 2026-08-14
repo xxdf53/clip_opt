@@ -66,11 +66,35 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('hard_fake_selected=1', text)
         self.assertIn('hard_fake_total=1', text)
 
+    def test_formats_semantic_coverage_diagnostics(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            real_logit_mean=value,
+            fake_logit_mean=value,
+            hard_fake_enabled=True,
+            hard_fake_semantic_coverage=True,
+            loss_hard_fake=value,
+            hard_fake_selected=value,
+            hard_fake_total=value,
+            hard_fake_logit_mean=value,
+            hard_fake_candidates=value,
+            hard_fake_semantic_spread=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('hard_fake_candidates=1', text)
+        self.assertIn('hard_fake_semantic_spread=1.250000', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([
                 '--patch_residual_head',
                 '--augmentation_dro_weight=1',
+                '--balanced_bias_calibration',
                 '--degradation_consistency_weight=1',
                 '--degradation_scale=0.75',
                 '--ema_decay=0.99',

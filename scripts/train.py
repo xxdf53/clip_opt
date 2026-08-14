@@ -17,10 +17,6 @@ from data import create_dataloader
 from networks.trainer import Trainer
 from options.test_options import TestOptions
 from options.train_options import TrainOptions
-from utils.bias_calibration import (
-    balanced_error_rate,
-    find_balanced_error_threshold,
-)
 from utils.evaluation_schedule import (
     should_evaluate,
     should_run_final_evaluation,
@@ -31,6 +27,7 @@ from scripts.validate import validate
 
 RETIRED_TRAINING_FLAGS = {
     '--augmentation_dro_weight',
+    '--balanced_bias_calibration',
     '--degradation_consistency_weight',
     '--degradation_scale',
     '--ema_decay',
@@ -161,6 +158,13 @@ def format_training_losses(model):
             f' hard_fake_logit_mean='
             f'{model.hard_fake_logit_mean.item():.6f}'
         )
+        if getattr(model, 'hard_fake_semantic_coverage', False):
+            text += (
+                f' hard_fake_candidates='
+                f'{model.hard_fake_candidates.item():.0f}'
+                f' hard_fake_semantic_spread='
+                f'{model.hard_fake_semantic_spread.item():.6f}'
+            )
     return text
 
 
@@ -193,12 +197,11 @@ def main():
         print(f'data_seed={opt.data_seed} model_seed={opt.seed}')
     model = Trainer(opt)
 
-    def evaluate(epoch, collect_logits=False):
+    def evaluate(epoch):
         print('*' * 25)
         print(time.strftime('%Y_%m_%d_%H_%M_%S', time.localtime()))
         accuracies = []
         average_precisions = []
-        prediction_records = []
 
         for index, subset in enumerate(evaluation_sets):
             test_opt.dataroot = str(test_root / subset)
@@ -208,21 +211,10 @@ def main():
             test_opt.no_crop = False
             test_opt.classes = ''
 
-            validation = validate(
-                model.model,
-                test_opt,
-                return_logits=collect_logits,
-            )
-            accuracy, average_precision = validation[:2]
+            accuracy, average_precision, _, _, _, _ = validate(
+                model.model, test_opt)
             accuracies.append(accuracy)
             average_precisions.append(average_precision)
-            if collect_logits:
-                prediction_records.append({
-                    'subset': subset,
-                    'labels': validation[4],
-                    'logits': validation[6],
-                    'average_precision': average_precision,
-                })
             print(
                 f'({index} {subset:10}) '
                 f'acc: {accuracy * 100:.1f}; '
@@ -235,69 +227,11 @@ def main():
             f'acc: {mean_accuracy:.1f}; ap: {mean_average_precision:.1f}')
         print('*' * 25)
         print(time.strftime('%Y_%m_%d_%H_%M_%S', time.localtime()))
-        rounded_accuracy = round(mean_accuracy, 4)
-        if collect_logits:
-            return rounded_accuracy, prediction_records
-        return rounded_accuracy
-
-    def calibrate_classifier_bias(prediction_records):
-        labels = np.concatenate([
-            record['labels'] for record in prediction_records
-        ])
-        logits = np.concatenate([
-            record['logits'] for record in prediction_records
-        ])
-        threshold = find_balanced_error_threshold(logits, labels)
-        before_balanced_accuracy = (
-            1.0 - balanced_error_rate(logits, labels, threshold=0.0))
-        after_balanced_accuracy = (
-            1.0 - balanced_error_rate(logits, labels, threshold=threshold))
-        model.fold_calibration_threshold(threshold)
-        print(
-            'balanced_bias_calibration '
-            f'threshold={threshold:.9f} '
-            f'bias_shift={-threshold:.9f} '
-            f'balanced_acc_before={before_balanced_accuracy * 100:.4f} '
-            f'balanced_acc_after={after_balanced_accuracy * 100:.4f}'
-        )
-        return threshold
-
-    def report_calibrated_accuracy(prediction_records, threshold):
-        accuracies = []
-        average_precisions = []
-        print('*' * 25)
-        print('calibrated internal evaluation at threshold 0')
-        for index, record in enumerate(prediction_records):
-            labels = record['labels']
-            predictions = record['logits'] > threshold
-            accuracy = float(np.mean(predictions == labels))
-            average_precision = record['average_precision']
-            accuracies.append(accuracy)
-            average_precisions.append(average_precision)
-            print(
-                f'({index} {record["subset"]:10}) '
-                f'acc: {accuracy * 100:.1f}; '
-                f'ap: {average_precision * 100:.1f}')
-
-        mean_accuracy = float(np.mean(accuracies)) * 100
-        mean_average_precision = float(np.mean(average_precisions)) * 100
-        print(
-            f'({len(prediction_records)} {"Mean":10}) '
-            f'acc: {mean_accuracy:.1f}; ap: {mean_average_precision:.1f}')
-        print('*' * 25)
         return round(mean_accuracy, 4)
 
-    def evaluate_and_save(epoch, calibrate_bias=False):
+    def evaluate_and_save(epoch):
         model.eval()
-        if calibrate_bias:
-            _, prediction_records = evaluate(epoch, collect_logits=True)
-            threshold = calibrate_classifier_bias(prediction_records)
-            test_accuracy = report_calibrated_accuracy(
-                prediction_records,
-                threshold,
-            )
-        else:
-            test_accuracy = evaluate(epoch)
+        test_accuracy = evaluate(epoch)
         suffix = (
             f'{epoch}_total_steps_{model.total_steps}_'
             f'testacc_{test_accuracy}')
@@ -349,12 +283,7 @@ def main():
             )
             model.adjust_learning_rate()
 
-    if opt.balanced_bias_calibration and model.total_steps > 0:
-        print(
-            f'==========final calibration total_steps '
-            f'{model.total_steps}==========')
-        evaluate_and_save(last_epoch, calibrate_bias=True)
-    elif should_run_final_evaluation(model.total_steps, last_eval_step):
+    if should_run_final_evaluation(model.total_steps, last_eval_step):
         print(f'==========final total_steps {model.total_steps}==========')
         evaluate_and_save(last_epoch)
 

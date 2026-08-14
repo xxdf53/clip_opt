@@ -82,27 +82,25 @@ python scripts/train.py [baseline arguments] \
 HFR adds no model parameters and is disabled by default. Checkpoints and
 image-only inference therefore remain identical to the baseline architecture.
 
-Balanced Bias Calibration is an optional training-side finalization step. It
-finds the scalar threshold minimizing balanced error on the internal evaluation
-split, then folds that threshold into the existing classifier bias. Ranking,
-checkpoint architecture, and image-only inference remain unchanged:
+Semantic-Coverage HFR (SC-HFR) optionally forms a candidate pool containing
+twice the requested number of lowest-logit fake samples, then greedily selects
+the semantically most diverse subset using the frozen caption embeddings that
+are already computed by C2P-CLIP. Text is used only for training-time sample
+selection; checkpoint structure and image-only inference remain unchanged:
 
 ```bash
-python scripts/train.py [baseline or HFR arguments] \
-  --balanced_bias_calibration
+python scripts/train.py [BN-HFR arguments] \
+  --hard_fake_semantic_coverage
 ```
-
-Calibration is disabled by default and is never fitted on external evaluation
-data. The internal split used for fitting must be reported as validation rather
-than as an untouched test set.
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
 gradient-accumulation emulation, PRH, SPH, RVIB, RTR, RRSD, EMA and degradation
-consistency) were removed from the active implementation. Their checkpoints
-require an older Git revision when they changed the model structure; baseline,
-HFR, SLAR, CPD and standard LoRA checkpoints remain compatible.
+consistency, real-only HFR compensation, and balanced bias calibration) were
+removed from the active implementation. Their checkpoints require an older Git
+revision when they changed the model structure; baseline, HFR, SC-HFR, SLAR,
+CPD and standard LoRA checkpoints remain compatible.
 
 ### 2) Inference / Testing
 

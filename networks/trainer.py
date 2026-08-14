@@ -6,7 +6,6 @@ from transformers import CLIPModel
 
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
-from utils.bias_calibration import fold_threshold_into_linear_bias
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
@@ -131,6 +130,7 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
+        return_semantic_embeddings=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
@@ -182,7 +182,9 @@ class CLIPModel_lora(nn.Module):
         )
         contrastive_loss = local_contrastive_loss(logits_per_text.t())
         outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
-        if not return_cpd:
+        if return_semantic_embeddings:
+            auxiliary['semantic_embeddings'] = text_embeddings.detach()
+        if not return_cpd and not return_semantic_embeddings:
             return outputs
 
         if return_cpd:
@@ -212,6 +214,7 @@ class Trainer(BaseModel):
         self.cpd_enabled = cpd_is_enabled(opt)
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
+        self.hard_fake_semantic_coverage = opt.hard_fake_semantic_coverage
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
@@ -289,15 +292,6 @@ class Trainer(BaseModel):
         print('*' * 25)
         return True
 
-    def fold_calibration_threshold(self, threshold):
-        """Fold a validation threshold into the existing classifier bias."""
-        wrapped_model = (
-            self.model.module
-            if isinstance(self.model, nn.DataParallel)
-            else self.model
-        )
-        fold_threshold_into_linear_bias(wrapped_model.model.fc, threshold)
-
     @staticmethod
     def _to_cuda(value):
         if isinstance(value, (tuple, list)):
@@ -336,11 +330,11 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
+            return_semantic_embeddings=self.hard_fake_semantic_coverage,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
-        if self.cpd_active:
-            self.auxiliary_components = auxiliary
+        self.auxiliary_components = auxiliary
 
     def update_cpd_schedule(self, step=None):
         """Update the delayed CPD weights for one optimizer step."""
@@ -377,6 +371,8 @@ class Trainer(BaseModel):
                     self.classhead,
                     self.label,
                     fraction=self.hard_fake_fraction,
+                    semantic_embeddings=self.auxiliary_components.get(
+                        'semantic_embeddings'),
                 )
             )
             self.loss_hard_fake = (
