@@ -7,7 +7,7 @@ from utils.training_objectives import hard_fake_reweighting_loss
 
 
 class HardFakeReweightingTests(unittest.TestCase):
-    def test_weight_one_changes_only_selected_sample_bce_weight(self):
+    def test_forward_value_matches_one_extra_selected_fake_bce(self):
         logits = torch.tensor([-0.2, -1.0, 0.5, 0.8])
         labels = torch.tensor([0.0, 1.0, 1.0, 0.0])
         per_sample = F.binary_cross_entropy_with_logits(
@@ -38,7 +38,7 @@ class HardFakeReweightingTests(unittest.TestCase):
         self.assertEqual(diagnostics['hard_fake_selected'].item(), 2)
         self.assertEqual(diagnostics['hard_fake_total'].item(), 4)
 
-    def test_gradient_changes_only_selected_fake_samples(self):
+    def test_auxiliary_gradient_has_zero_common_mode(self):
         logits = torch.tensor(
             [-0.5, -1.0, 0.5, 1.0], requires_grad=True)
         labels = torch.tensor([0.0, 1.0, 1.0, 0.0])
@@ -47,8 +47,10 @@ class HardFakeReweightingTests(unittest.TestCase):
             logits, labels, fraction=0.5)
         loss.backward()
 
-        self.assertEqual(torch.count_nonzero(logits.grad).item(), 1)
-        self.assertNotEqual(logits.grad[1].item(), 0.0)
+        self.assertAlmostEqual(logits.grad.sum().item(), 0.0, places=7)
+        self.assertLess(logits.grad[1].item(), 0.0)
+        for index in (0, 2, 3):
+            self.assertGreater(logits.grad[index].item(), 0.0)
 
     def test_no_fake_or_too_few_fake_samples_returns_safe_zero(self):
         for labels in (torch.zeros(4), torch.tensor([0.0, 1.0, 0.0])):

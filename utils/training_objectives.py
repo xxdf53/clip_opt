@@ -85,12 +85,13 @@ def _flatten_binary_inputs(logits, labels):
 
 
 def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
-    """Return a global-batch loss for the lowest-logit fake samples.
+    """Return a bias-neutral loss for the lowest-logit fake samples.
 
-    The loss is normalized by the full batch size. Adding it to the original
-    mean BCE therefore changes each selected fake sample's classification
-    weight from 1 to 2 when the external loss weight is 1, while every other
-    sample keeps its original weight.
+    The forward value is the selected fake BCE normalized by the full batch
+    size. During backward, the global logit mean is removed and restored as a
+    detached value. This keeps the auxiliary gradient's common mode at zero,
+    so HFR cannot update the classifier bias while still raising hard fake
+    logits relative to the rest of the batch.
     """
     if not 0 < fraction < 1:
         raise ValueError(f'hard-fake fraction must be in (0, 1), got {fraction}')
@@ -116,8 +117,10 @@ def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
         sorted=False,
     ).indices
     selected_indices = fake_indices[selected_within_fake]
+    mean_logit = logits.mean()
+    bias_neutral_logits = logits - mean_logit + mean_logit.detach()
     per_sample = F.binary_cross_entropy_with_logits(
-        logits,
+        bias_neutral_logits,
         labels,
         reduction='none',
     )
