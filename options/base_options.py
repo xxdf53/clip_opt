@@ -49,6 +49,8 @@ def build_experiment_name(opt, timestamp=None):
     if opt.hard_fake_loss_weight > 0:
         configuration_parts.append(
             f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
+    if getattr(opt, 'balanced_bias_calibration', False):
+        configuration_parts.append('bcal')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -171,7 +173,7 @@ class BaseOptions:
             type=float,
             default=0.0,
             help=(
-                'real-compensated auxiliary BCE weight for the globally '
+                'bias-neutral auxiliary BCE weight for the globally '
                 'lowest-logit fake samples; 0 disables hard-fake reweighting'
             ),
         )
@@ -180,6 +182,14 @@ class BaseOptions:
             type=float,
             default=0.25,
             help='fraction of fake samples selected from each global batch',
+        )
+        parser.add_argument(
+            '--balanced_bias_calibration',
+            action='store_true',
+            help=(
+                'after training, fit one balanced-error threshold on the '
+                'internal evaluation split and fold it into classifier bias'
+            ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 

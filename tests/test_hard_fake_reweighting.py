@@ -38,7 +38,7 @@ class HardFakeReweightingTests(unittest.TestCase):
         self.assertEqual(diagnostics['hard_fake_selected'].item(), 2)
         self.assertEqual(diagnostics['hard_fake_total'].item(), 4)
 
-    def test_auxiliary_gradient_is_compensated_only_by_real_samples(self):
+    def test_auxiliary_gradient_has_zero_common_mode(self):
         logits = torch.tensor(
             [-0.5, -1.0, 0.5, 1.0], requires_grad=True)
         labels = torch.tensor([0.0, 1.0, 1.0, 0.0])
@@ -49,14 +49,12 @@ class HardFakeReweightingTests(unittest.TestCase):
 
         self.assertAlmostEqual(logits.grad.sum().item(), 0.0, places=7)
         self.assertLess(logits.grad[1].item(), 0.0)
-        for index in (0, 3):
+        for index in (0, 2, 3):
             self.assertGreater(logits.grad[index].item(), 0.0)
-        self.assertEqual(logits.grad[2].item(), 0.0)
 
-    def test_missing_class_or_too_few_fake_samples_returns_safe_zero(self):
+    def test_no_fake_or_too_few_fake_samples_returns_safe_zero(self):
         for labels in (
             torch.zeros(4),
-            torch.ones(4),
             torch.tensor([0.0, 1.0, 0.0]),
         ):
             logits = torch.zeros(labels.numel(), requires_grad=True)

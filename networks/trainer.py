@@ -6,6 +6,7 @@ from transformers import CLIPModel
 
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
+from utils.bias_calibration import fold_threshold_into_linear_bias
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
@@ -287,6 +288,15 @@ class Trainer(BaseModel):
             f'with delr {self.delr}')
         print('*' * 25)
         return True
+
+    def fold_calibration_threshold(self, threshold):
+        """Fold a validation threshold into the existing classifier bias."""
+        wrapped_model = (
+            self.model.module
+            if isinstance(self.model, nn.DataParallel)
+            else self.model
+        )
+        fold_threshold_into_linear_bias(wrapped_model.model.fc, threshold)
 
     @staticmethod
     def _to_cuda(value):

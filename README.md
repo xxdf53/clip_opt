@@ -67,12 +67,12 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Real-compensated Hard-Fake Reweighting (HFR) is an optional training-only
+Bias-neutral Hard-Fake Reweighting (HFR) is an optional training-only
 objective for the diffusion protocol. After multi-GPU logits are gathered, it
 selects the lowest-logit quarter of fake samples and adds their BCE once more.
-Its backward pass routes the compensating gradient only through real samples,
-preventing a classifier-bias shift without pushing unselected fake logits down.
-The original BCE over every sample remains unchanged:
+Its backward pass removes the global common-mode logit gradient, preventing the
+auxiliary loss from directly shifting the classifier bias. The original BCE
+over every sample remains unchanged:
 
 ```bash
 python scripts/train.py [baseline arguments] \
@@ -81,6 +81,20 @@ python scripts/train.py [baseline arguments] \
 
 HFR adds no model parameters and is disabled by default. Checkpoints and
 image-only inference therefore remain identical to the baseline architecture.
+
+Balanced Bias Calibration is an optional training-side finalization step. It
+finds the scalar threshold minimizing balanced error on the internal evaluation
+split, then folds that threshold into the existing classifier bias. Ranking,
+checkpoint architecture, and image-only inference remain unchanged:
+
+```bash
+python scripts/train.py [baseline or HFR arguments] \
+  --balanced_bias_calibration
+```
+
+Calibration is disabled by default and is never fitted on external evaluation
+data. The internal split used for fitting must be reported as validation rather
+than as an untouched test set.
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint

@@ -16,6 +16,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.cpd_direction_weight, 0.0)
         self.assertEqual(args.hard_fake_loss_weight, 0.0)
         self.assertEqual(args.hard_fake_fraction, 0.25)
+        self.assertFalse(args.balanced_bias_calibration)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -59,6 +60,16 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260811-180000')
 
         self.assertTrue(name.endswith('__hfr-w1.0-q0.25'))
+
+    def test_compact_name_records_balanced_bias_calibration(self):
+        args = self.parse([
+            '--name', 'calibrated',
+            '--balanced_bias_calibration',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260814-180000')
+
+        self.assertTrue(name.endswith('__bcal'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])
