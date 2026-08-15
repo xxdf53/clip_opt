@@ -11,6 +11,7 @@ from utils.training_objectives import (
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
+    gradient_conflict_diagnostics,
     hard_fake_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
@@ -130,7 +131,6 @@ class CLIPModel_lora(nn.Module):
         cpd_attention_mask=None,
         labels=None,
         return_cpd=False,
-        return_semantic_embeddings=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
@@ -182,9 +182,7 @@ class CLIPModel_lora(nn.Module):
         )
         contrastive_loss = local_contrastive_loss(logits_per_text.t())
         outputs = (contrastive_loss.unsqueeze(0), class_logits.squeeze(1))
-        if return_semantic_embeddings:
-            auxiliary['semantic_embeddings'] = text_embeddings.detach()
-        if not return_cpd and not return_semantic_embeddings:
+        if not return_cpd:
             return outputs
 
         if return_cpd:
@@ -214,8 +212,10 @@ class Trainer(BaseModel):
         self.cpd_enabled = cpd_is_enabled(opt)
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
-        self.hard_fake_semantic_coverage = opt.hard_fake_semantic_coverage
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
+        self.gradient_conflict_diagnostics = (
+            opt.gradient_conflict_diagnostics)
+        self.gradient_diagnostic_frequency = opt.loss_freq
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -330,7 +330,6 @@ class Trainer(BaseModel):
             cpd_attention_mask=self.cpd_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
-            return_semantic_embeddings=self.hard_fake_semantic_coverage,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
@@ -371,8 +370,6 @@ class Trainer(BaseModel):
                     self.classhead,
                     self.label,
                     fraction=self.hard_fake_fraction,
-                    semantic_embeddings=self.auxiliary_components.get(
-                        'semantic_embeddings'),
                 )
             )
             self.loss_hard_fake = (
@@ -446,6 +443,18 @@ class Trainer(BaseModel):
         )
         for name, value in anchor_diagnostics.items():
             setattr(self, name, value)
+        diagnostic_step = self.total_steps + 1
+        if (
+            self.gradient_conflict_diagnostics
+            and diagnostic_step % self.gradient_diagnostic_frequency == 0
+        ):
+            gradient_diagnostics = gradient_conflict_diagnostics(
+                self.loss_contrastive,
+                self.loss_classification,
+                self.model.parameters(),
+            )
+            for name, value in gradient_diagnostics.items():
+                setattr(self, name, value)
         self.loss.backward()
         self.optimizer.step()
         self.total_steps += 1

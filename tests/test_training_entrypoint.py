@@ -66,28 +66,30 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('hard_fake_selected=1', text)
         self.assertIn('hard_fake_total=1', text)
 
-    def test_formats_semantic_coverage_diagnostics(self):
+    def test_formats_gradient_conflict_diagnostics(self):
         value = SimpleNamespace(item=lambda: 1.25)
+        conflict = SimpleNamespace(item=lambda: 1.0)
         model = SimpleNamespace(
             loss=value,
             loss_contrastive=value,
             loss_classification=value,
             real_logit_mean=value,
             fake_logit_mean=value,
-            hard_fake_enabled=True,
-            hard_fake_semantic_coverage=True,
-            loss_hard_fake=value,
-            hard_fake_selected=value,
-            hard_fake_total=value,
-            hard_fake_logit_mean=value,
-            hard_fake_candidates=value,
-            hard_fake_semantic_spread=value,
+            gradient_conflict_diagnostics=True,
+            gradient_cosine=value,
+            gradient_conflict=conflict,
+            gradient_contrastive_norm=value,
+            gradient_classification_norm=value,
+            gradient_shared_numel=value,
         )
 
         text = format_training_losses(model)
 
-        self.assertIn('hard_fake_candidates=1', text)
-        self.assertIn('hard_fake_semantic_spread=1.250000', text)
+        self.assertIn('grad_cos=1.250000', text)
+        self.assertIn('grad_conflict=1', text)
+        self.assertIn('grad_contrastive_norm=1.250000', text)
+        self.assertIn('grad_classification_norm=1.250000', text)
+        self.assertIn('grad_shared_numel=1', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
@@ -98,6 +100,7 @@ class TrainingEntrypointTests(unittest.TestCase):
                 '--degradation_consistency_weight=1',
                 '--degradation_scale=0.75',
                 '--ema_decay=0.99',
+                '--hard_fake_semantic_coverage',
                 '--residual_vib',
                 '--residual_trust_weight=1',
                 '--symmetric_prototype_head',

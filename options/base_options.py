@@ -47,13 +47,10 @@ def build_experiment_name(opt, timestamp=None):
             f'w{opt.cpd_warmup_steps}'
         )
     if opt.hard_fake_loss_weight > 0:
-        semantic_part = (
-            '-sc' if getattr(opt, 'hard_fake_semantic_coverage', False)
-            else ''
-        )
         configuration_parts.append(
-            f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}'
-            f'{semantic_part}')
+            f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
+    if getattr(opt, 'gradient_conflict_diagnostics', False):
+        configuration_parts.append('gcd')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -187,11 +184,11 @@ class BaseOptions:
             help='fraction of fake samples selected from each global batch',
         )
         parser.add_argument(
-            '--hard_fake_semantic_coverage',
+            '--gradient_conflict_diagnostics',
             action='store_true',
             help=(
-                'select hard fake samples for semantic coverage from a '
-                'candidate pool twice the selected size'
+                'log contrastive/classification gradient alignment on '
+                'shared trainable parameters at --loss_freq steps'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -257,13 +254,6 @@ class BaseOptions:
             raise ValueError('--hard_fake_loss_weight cannot be negative')
         if not 0 < opt.hard_fake_fraction < 1:
             raise ValueError('--hard_fake_fraction must be in (0, 1)')
-        if (
-            opt.hard_fake_semantic_coverage
-            and opt.hard_fake_loss_weight <= 0
-        ):
-            raise ValueError(
-                '--hard_fake_semantic_coverage requires '
-                '--hard_fake_loss_weight > 0')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

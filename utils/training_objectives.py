@@ -84,65 +84,10 @@ def _flatten_binary_inputs(logits, labels):
     return logits, labels
 
 
-def _semantic_coverage_selection(
-    fake_logits,
-    fake_embeddings,
-    selected_count,
-):
-    """Select hard fake samples with greedy semantic coverage."""
-    candidate_count = min(fake_logits.numel(), 2 * selected_count)
-    candidate_indices = torch.topk(
-        fake_logits.detach(),
-        k=candidate_count,
-        largest=False,
-        sorted=True,
-    ).indices
-    candidate_embeddings = F.normalize(
-        fake_embeddings.detach()[candidate_indices],
-        p=2,
-        dim=-1,
-    )
-
-    selected_positions = [0]
-    selected_mask = torch.zeros(
-        candidate_count,
-        dtype=torch.bool,
-        device=fake_logits.device,
-    )
-    selected_mask[0] = True
-    minimum_distances = 1.0 - (
-        candidate_embeddings @ candidate_embeddings[0])
-
-    while len(selected_positions) < selected_count:
-        minimum_distances[selected_mask] = -1.0
-        next_position = int(torch.argmax(minimum_distances).item())
-        selected_positions.append(next_position)
-        selected_mask[next_position] = True
-        next_distances = 1.0 - (
-            candidate_embeddings @ candidate_embeddings[next_position])
-        minimum_distances = torch.minimum(
-            minimum_distances,
-            next_distances,
-        )
-
-    positions = torch.tensor(
-        selected_positions,
-        dtype=torch.long,
-        device=fake_logits.device,
-    )
-    selected_embeddings = candidate_embeddings[positions]
-    if selected_count > 1:
-        semantic_spread = torch.pdist(selected_embeddings, p=2).mean()
-    else:
-        semantic_spread = fake_logits.new_zeros(())
-    return candidate_indices[positions], candidate_count, semantic_spread
-
-
 def hard_fake_reweighting_loss(
     logits,
     labels,
     fraction=0.25,
-    semantic_embeddings=None,
 ):
     """Return a bias-neutral loss for selected hard fake samples.
 
@@ -150,21 +95,12 @@ def hard_fake_reweighting_loss(
     size. During backward, the global logit mean is removed and restored as a
     detached value. This keeps the auxiliary gradient's common mode at zero,
     so HFR cannot directly update the classifier bias while still raising hard
-    fake logits relative to the rest of the batch. Optional frozen semantic
-    embeddings diversify selection within a candidate pool twice as large as
-    the requested subset.
+    fake logits relative to the rest of the batch.
     """
     if not 0 < fraction < 1:
         raise ValueError(f'hard-fake fraction must be in (0, 1), got {fraction}')
 
     logits, labels = _flatten_binary_inputs(logits, labels)
-    if semantic_embeddings is not None:
-        if semantic_embeddings.ndim != 2:
-            raise ValueError(
-                'semantic embeddings must have shape [batch, features]')
-        if semantic_embeddings.shape[0] != logits.numel():
-            raise ValueError(
-                'semantic embeddings must match the global logit batch')
     fake_indices = torch.nonzero(labels >= 0.5, as_tuple=False).flatten()
     fake_count = fake_indices.numel()
     selected_count = int(fraction * fake_count)
@@ -173,31 +109,17 @@ def hard_fake_reweighting_loss(
         'hard_fake_selected': logits.new_tensor(float(selected_count)),
         'hard_fake_total': logits.new_tensor(float(fake_count)),
         'hard_fake_logit_mean': logits.new_zeros(()),
-        'hard_fake_candidates': logits.new_zeros(()),
-        'hard_fake_semantic_spread': logits.new_zeros(()),
     }
     if selected_count == 0:
         return zero, diagnostics
 
     fake_logits = logits[fake_indices]
-    if semantic_embeddings is None:
-        selected_within_fake = torch.topk(
-            fake_logits.detach(),
-            k=selected_count,
-            largest=False,
-            sorted=False,
-        ).indices
-    else:
-        selected_within_fake, candidate_count, semantic_spread = (
-            _semantic_coverage_selection(
-                fake_logits,
-                semantic_embeddings[fake_indices],
-                selected_count,
-            )
-        )
-        diagnostics['hard_fake_candidates'] = logits.new_tensor(
-            float(candidate_count))
-        diagnostics['hard_fake_semantic_spread'] = semantic_spread
+    selected_within_fake = torch.topk(
+        fake_logits.detach(),
+        k=selected_count,
+        largest=False,
+        sorted=False,
+    ).indices
     selected_indices = fake_indices[selected_within_fake]
     mean_logit = logits.mean()
     bias_neutral_logits = logits - mean_logit + mean_logit.detach()
@@ -210,6 +132,58 @@ def hard_fake_reweighting_loss(
     diagnostics['hard_fake_logit_mean'] = (
         logits.detach()[selected_indices].mean())
     return loss, diagnostics
+
+
+def gradient_conflict_diagnostics(first_loss, second_loss, parameters):
+    """Measure gradient alignment without modifying parameter gradients."""
+    parameters = tuple(
+        parameter for parameter in parameters if parameter.requires_grad)
+    first_gradients = torch.autograd.grad(
+        first_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    second_gradients = torch.autograd.grad(
+        second_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+
+    dot_product = first_loss.detach().new_zeros((), dtype=torch.float32)
+    first_squared_norm = dot_product.clone()
+    second_squared_norm = dot_product.clone()
+    shared_numel = 0
+    for first_gradient, second_gradient in zip(
+        first_gradients, second_gradients
+    ):
+        if first_gradient is None or second_gradient is None:
+            continue
+        first_gradient = first_gradient.detach().float()
+        second_gradient = second_gradient.detach().float()
+        dot_product = dot_product + (
+            first_gradient * second_gradient).sum()
+        first_squared_norm = first_squared_norm + first_gradient.square().sum()
+        second_squared_norm = (
+            second_squared_norm + second_gradient.square().sum())
+        shared_numel += first_gradient.numel()
+
+    if shared_numel == 0:
+        raise ValueError('diagnostic losses have no shared trainable parameters')
+
+    first_norm = first_squared_norm.sqrt()
+    second_norm = second_squared_norm.sqrt()
+    denominator = (first_norm * second_norm).clamp_min(
+        torch.finfo(dot_product.dtype).eps)
+    cosine = dot_product / denominator
+    return {
+        'gradient_cosine': cosine,
+        'gradient_conflict': (dot_product < 0).to(dot_product.dtype),
+        'gradient_contrastive_norm': first_norm,
+        'gradient_classification_norm': second_norm,
+        'gradient_shared_numel': dot_product.new_tensor(float(shared_numel)),
+    }
 
 
 def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):

@@ -82,15 +82,14 @@ python scripts/train.py [baseline arguments] \
 HFR adds no model parameters and is disabled by default. Checkpoints and
 image-only inference therefore remain identical to the baseline architecture.
 
-Semantic-Coverage HFR (SC-HFR) optionally forms a candidate pool containing
-twice the requested number of lowest-logit fake samples, then greedily selects
-the semantically most diverse subset using the frozen caption embeddings that
-are already computed by C2P-CLIP. Text is used only for training-time sample
-selection; checkpoint structure and image-only inference remain unchanged:
+An optional diagnostic measures the gradient cosine between the caption
+contrastive loss and classification loss on their shared trainable parameters.
+It runs only at logging steps, does not populate parameter gradients, and does
+not change the loss, optimizer, checkpoint, or image-only inference:
 
 ```bash
-python scripts/train.py [BN-HFR arguments] \
-  --hard_fake_semantic_coverage
+python scripts/train.py [baseline arguments] \
+  --gradient_conflict_diagnostics --loss_freq 10
 ```
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
@@ -98,9 +97,12 @@ all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
 gradient-accumulation emulation, PRH, SPH, RVIB, RTR, RRSD, EMA and degradation
 consistency, real-only HFR compensation, and balanced bias calibration) were
-removed from the active implementation. Their checkpoints require an older Git
-revision when they changed the model structure; baseline, HFR, SC-HFR, SLAR,
-CPD and standard LoRA checkpoints remain compatible.
+removed from the active implementation. Semantic-coverage HFR was also removed
+after valid captions produced diverse selections without improving diffusion
+generalization. Historical checkpoints that did not change the model structure
+remain load-compatible; reproducing removed training paths requires the
+corresponding Git revision. Baseline, HFR, SLAR, CPD and standard LoRA
+checkpoints remain compatible.
 
 ### 2) Inference / Testing
 

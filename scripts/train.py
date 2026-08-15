@@ -32,6 +32,7 @@ RETIRED_TRAINING_FLAGS = {
     '--degradation_scale',
     '--ema_decay',
     '--gradient_accumulation_steps',
+    '--hard_fake_semantic_coverage',
     '--gate_loss_weight',
     '--gate_supervision_weight',
     '--gate_target_margin',
@@ -158,13 +159,16 @@ def format_training_losses(model):
             f' hard_fake_logit_mean='
             f'{model.hard_fake_logit_mean.item():.6f}'
         )
-        if getattr(model, 'hard_fake_semantic_coverage', False):
-            text += (
-                f' hard_fake_candidates='
-                f'{model.hard_fake_candidates.item():.0f}'
-                f' hard_fake_semantic_spread='
-                f'{model.hard_fake_semantic_spread.item():.6f}'
-            )
+    if getattr(model, 'gradient_conflict_diagnostics', False):
+        text += (
+            f' grad_cos={model.gradient_cosine.item():.6f}'
+            f' grad_conflict={model.gradient_conflict.item():.0f}'
+            f' grad_contrastive_norm='
+            f'{model.gradient_contrastive_norm.item():.6f}'
+            f' grad_classification_norm='
+            f'{model.gradient_classification_norm.item():.6f}'
+            f' grad_shared_numel={model.gradient_shared_numel.item():.0f}'
+        )
     return text
 
 
