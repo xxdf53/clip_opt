@@ -16,8 +16,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.cpd_direction_weight, 0.0)
         self.assertEqual(args.hard_fake_loss_weight, 0.0)
         self.assertEqual(args.hard_fake_fraction, 0.25)
-        self.assertFalse(args.gradient_conflict_diagnostics)
-        self.assertFalse(args.classification_referenced_gradient_cap)
+        self.assertFalse(args.paired_authenticity_prompt_classification)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -62,25 +61,15 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertTrue(name.endswith('__hfr-w1.0-q0.25'))
 
-    def test_compact_name_records_gradient_conflict_diagnostics(self):
+    def test_compact_name_records_paired_authenticity_classification(self):
         args = self.parse([
-            '--name', 'gradient_diagnostics',
-            '--gradient_conflict_diagnostics',
+            '--name', 'paired_authenticity',
+            '--paired_authenticity_prompt_classification',
         ])
 
-        name = build_experiment_name(args, timestamp='20260816-120000')
+        name = build_experiment_name(args, timestamp='20260817-120000')
 
-        self.assertTrue(name.endswith('__gcd'))
-
-    def test_compact_name_records_classification_referenced_gradient_cap(self):
-        args = self.parse([
-            '--name', 'gradient_cap',
-            '--classification_referenced_gradient_cap',
-        ])
-
-        name = build_experiment_name(args, timestamp='20260816-130000')
-
-        self.assertTrue(name.endswith('__crgc'))
+        self.assertTrue(name.endswith('__papc'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])

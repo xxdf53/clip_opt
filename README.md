@@ -82,42 +82,32 @@ python scripts/train.py [baseline arguments] \
 HFR adds no model parameters and is disabled by default. Checkpoints and
 image-only inference therefore remain identical to the baseline architecture.
 
-An optional diagnostic measures the gradient cosine between the caption
-contrastive loss and classification loss on their shared trainable parameters.
-It runs only at logging steps, does not populate parameter gradients, and does
-not change the loss, optimizer, checkpoint, or image-only inference:
+Paired Authenticity Prompt Classification (PAPC) replaces instance-level
+caption matching with a two-way decision between prompts that share the same
+caption but differ in their real/fake prefix and suffix. This removes content
+identity as the supervision target while preserving the training-time semantic
+context:
 
 ```bash
 python scripts/train.py [baseline arguments] \
-  --gradient_conflict_diagnostics --loss_freq 10
+  --paired_authenticity_prompt_classification
 ```
 
-Classification-Referenced Gradient Capping (CRGC) addresses gradient magnitude
-imbalance without changing either direction. When the shared contrastive
-gradient is larger, CRGC scales it to the classification-gradient norm before
-combining them. Smaller contrastive gradients and classifier-head gradients
-remain intact. CRGC is standalone and cannot be combined with HFR, SLAR, or
-CPD:
-
-```bash
-python scripts/train.py [baseline arguments] \
-  --classification_referenced_gradient_cap --loss_freq 10
-```
-
-CRGC adds no parameters and does not change checkpoint loading or image-only
-inference.
+PAPC is training-only, adds no model parameters, and must be tested alone
+without HFR, SLAR, or CPD. Inference remains image-only.
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
 gradient-accumulation emulation, PRH, SPH, RVIB, RTR, RRSD, EMA and degradation
-consistency, real-only HFR compensation, balanced bias calibration, and
-classification-protected gradient projection) were
+consistency, real-only HFR compensation, balanced bias calibration,
+classification-protected gradient projection, and classification-referenced
+gradient capping) were
 removed from the active implementation. Semantic-coverage HFR was also removed
 after valid captions produced diverse selections without improving diffusion
 generalization. Historical checkpoints that did not change the model structure
 remain load-compatible; reproducing removed training paths requires the
-corresponding Git revision. Baseline, HFR, SLAR, CPD and standard LoRA
+corresponding Git revision. Baseline, PAPC, HFR, SLAR, CPD and standard LoRA
 checkpoints remain compatible.
 
 ### 2) Inference / Testing

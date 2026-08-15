@@ -131,6 +131,37 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(sample[3].shape, (2, 5))
         self.assertEqual(sample[3][:, 0].tolist(), [10, 20])
 
+    def test_papc_dataset_returns_real_fake_prompt_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'images'
+            captions = Path(directory) / 'captions'
+            (root / '0_real').mkdir(parents=True)
+            (captions / '0_real').mkdir(parents=True)
+            Image.new('RGB', (4, 4), 'white').save(
+                root / '0_real' / 'sample.png')
+            (captions / '0_real' / 'sample.txt').write_text(
+                'A white square.', encoding='utf-8')
+            options = SimpleNamespace(
+                imgroot=str(root),
+                textroot=str(captions),
+                isTrain=True,
+                data_aug=False,
+                clip='fake-clip',
+                cates=['Deepfake', 'Camera'],
+                cpd_direction_weight=0.0,
+                cpd_content_weight=0.0,
+                paired_authenticity_prompt_classification=True,
+            )
+            dataset = ImageFolder2(str(root), options, transform=None)
+            with patch(
+                'data.datasets._get_tokenizer',
+                return_value=FakeTokenizer(),
+            ):
+                sample = dataset[0]
+
+        self.assertEqual(sample[3].shape, (2, 5))
+        self.assertEqual(sample[3][:, 0].tolist(), [10, 20])
+
     def test_cpd_local_forward_returns_loss_and_shared_lora_residual(self):
         model = build_minimal_model()
         images = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
@@ -142,8 +173,8 @@ class RetainedGanObjectiveTests(unittest.TestCase):
 
         contrastive, logits, auxiliary = model(
             images,
-            cpd_input_ids=paired_ids,
-            cpd_attention_mask=torch.ones_like(paired_ids),
+            paired_input_ids=paired_ids,
+            paired_attention_mask=torch.ones_like(paired_ids),
             labels=labels,
             return_cpd=True,
         )
@@ -151,6 +182,34 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(contrastive.shape, (1,))
         self.assertEqual(logits.shape, (2,))
         self.assertEqual(auxiliary['image_residual'].shape, (2, 2))
+
+    def test_papc_local_forward_favors_matching_authenticity_prompt(self):
+        model = build_minimal_model()
+        images = torch.tensor([[2.0, -0.25], [-2.0, -0.25]])
+        paired_ids = torch.tensor([
+            [[1, 0], [-1, 0]],
+            [[1, 0], [-1, 0]],
+        ])
+        attention_mask = torch.ones_like(paired_ids)
+
+        matching_loss, logits = model(
+            images,
+            paired_input_ids=paired_ids,
+            paired_attention_mask=attention_mask,
+            labels=torch.tensor([0.0, 1.0]),
+            return_paired_authenticity=True,
+        )
+        reversed_loss, _ = model(
+            images,
+            paired_input_ids=paired_ids,
+            paired_attention_mask=attention_mask,
+            labels=torch.tensor([1.0, 0.0]),
+            return_paired_authenticity=True,
+        )
+
+        self.assertEqual(matching_loss.shape, (1,))
+        self.assertEqual(logits.shape, (2,))
+        self.assertLess(matching_loss.item(), reversed_loss.item())
 
     def test_cpd_and_slar_losses_favor_correct_separation(self):
         residual = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])

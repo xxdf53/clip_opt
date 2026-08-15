@@ -49,10 +49,8 @@ def build_experiment_name(opt, timestamp=None):
     if opt.hard_fake_loss_weight > 0:
         configuration_parts.append(
             f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
-    if getattr(opt, 'classification_referenced_gradient_cap', False):
-        configuration_parts.append('crgc')
-    elif getattr(opt, 'gradient_conflict_diagnostics', False):
-        configuration_parts.append('gcd')
+    if getattr(opt, 'paired_authenticity_prompt_classification', False):
+        configuration_parts.append('papc')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -186,19 +184,11 @@ class BaseOptions:
             help='fraction of fake samples selected from each global batch',
         )
         parser.add_argument(
-            '--gradient_conflict_diagnostics',
+            '--paired_authenticity_prompt_classification',
             action='store_true',
             help=(
-                'log contrastive/classification gradient alignment on '
-                'shared trainable parameters at --loss_freq steps'
-            ),
-        )
-        parser.add_argument(
-            '--classification_referenced_gradient_cap',
-            action='store_true',
-            help=(
-                'cap the contrastive gradient at the classification gradient '
-                'norm on shared trainable parameters'
+                'replace instance-level caption contrastive learning with '
+                'per-image real/fake paired-prompt classification'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -264,18 +254,15 @@ class BaseOptions:
             raise ValueError('--hard_fake_loss_weight cannot be negative')
         if not 0 < opt.hard_fake_fraction < 1:
             raise ValueError('--hard_fake_fraction must be in (0, 1)')
-        if opt.classification_referenced_gradient_cap:
-            if (
-                opt.anchor_loss_weight > 0
-                or opt.cpd_direction_weight > 0
-                or opt.cpd_content_weight > 0
-                or opt.hard_fake_loss_weight > 0
-            ):
-                raise ValueError(
-                    '--classification_referenced_gradient_cap must be tested '
-                    'alone '
-                    'without SLAR, CPD, or HFR')
-            opt.gradient_conflict_diagnostics = True
+        if opt.paired_authenticity_prompt_classification and (
+            opt.anchor_loss_weight > 0
+            or opt.cpd_direction_weight > 0
+            or opt.cpd_content_weight > 0
+            or opt.hard_fake_loss_weight > 0
+        ):
+            raise ValueError(
+                '--paired_authenticity_prompt_classification must be tested '
+                'alone without SLAR, CPD, or HFR')
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

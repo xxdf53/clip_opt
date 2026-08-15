@@ -7,12 +7,10 @@ from transformers import CLIPModel
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
 from utils.training_objectives import (
-    classification_referenced_gradient_cap,
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
-    gradient_conflict_diagnostics,
     hard_fake_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
@@ -97,13 +95,13 @@ class CLIPModel_lora(nn.Module):
         )
         return self.model.visual_projection(vision_outputs.pooler_output)
 
-    def _encode_counterfactual_prompts(self, input_ids, attention_mask):
+    def _encode_paired_prompts(self, input_ids, attention_mask):
         if input_ids.ndim != 3 or input_ids.shape[1] != 2:
             raise ValueError(
-                'CPD input_ids must have shape [batch, 2, sequence]')
+                'paired input_ids must have shape [batch, 2, sequence]')
         if attention_mask.shape != input_ids.shape:
             raise ValueError(
-                'CPD attention_mask must match counterfactual input_ids')
+                'paired attention_mask must match paired input_ids')
 
         batch_size, prompt_count, sequence_length = input_ids.shape
         text_embeddings = F.normalize(
@@ -115,8 +113,12 @@ class CLIPModel_lora(nn.Module):
             p=2,
             dim=-1,
         ).reshape(batch_size, prompt_count, -1)
-        real_embeddings = text_embeddings[:, 0]
-        fake_embeddings = text_embeddings[:, 1]
+        return text_embeddings
+
+    def _encode_counterfactual_prompts(self, input_ids, attention_mask):
+        text_embeddings = self._encode_paired_prompts(
+            input_ids, attention_mask)
+        real_embeddings, fake_embeddings = text_embeddings.unbind(dim=1)
         direction, center = counterfactual_prompt_components(
             real_embeddings, fake_embeddings)
         prompt_gap = (fake_embeddings - real_embeddings).norm(p=2, dim=-1)
@@ -128,10 +130,11 @@ class CLIPModel_lora(nn.Module):
         input_ids=None,
         attention_mask=None,
         cla=False,
-        cpd_input_ids=None,
-        cpd_attention_mask=None,
+        paired_input_ids=None,
+        paired_attention_mask=None,
         labels=None,
         return_cpd=False,
+        return_paired_authenticity=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
@@ -146,15 +149,39 @@ class CLIPModel_lora(nn.Module):
             return class_logits
 
         auxiliary = {}
-        if return_cpd:
-            if cpd_input_ids is None or cpd_attention_mask is None:
+        if return_paired_authenticity:
+            if return_cpd:
+                raise ValueError('PAPC and CPD cannot be enabled together')
+            if paired_input_ids is None or paired_attention_mask is None:
+                raise ValueError('paired real/fake prompts are required for PAPC')
+            if labels is None:
+                raise ValueError('labels are required for PAPC')
+            paired_embeddings = self._encode_paired_prompts(
+                paired_input_ids,
+                paired_attention_mask,
+            )
+            label_indices = labels.flatten().long()
+            if label_indices.numel() != image_embeddings.shape[0]:
+                raise ValueError('PAPC labels must match the image batch')
+            authenticity_logits = torch.einsum(
+                'bd,bpd->bp', image_embeddings, paired_embeddings)
+            authenticity_logits = (
+                authenticity_logits * self.model.logit_scale.exp())
+            paired_authenticity_loss = F.cross_entropy(
+                authenticity_logits, label_indices)
+            return (
+                paired_authenticity_loss.unsqueeze(0),
+                class_logits.squeeze(1),
+            )
+        elif return_cpd:
+            if paired_input_ids is None or paired_attention_mask is None:
                 raise ValueError('counterfactual prompts are required for CPD')
             if labels is None:
                 raise ValueError('labels are required for CPD')
             paired_embeddings, direction, center, prompt_gap = (
                 self._encode_counterfactual_prompts(
-                    cpd_input_ids,
-                    cpd_attention_mask,
+                    paired_input_ids,
+                    paired_attention_mask,
                 )
             )
             label_indices = labels.flatten().long()
@@ -211,14 +238,11 @@ class Trainer(BaseModel):
         self.cpd_start_step = opt.cpd_start_step
         self.cpd_warmup_steps = opt.cpd_warmup_steps
         self.cpd_enabled = cpd_is_enabled(opt)
+        self.paired_authenticity_enabled = (
+            opt.paired_authenticity_prompt_classification)
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
-        self.gradient_conflict_diagnostics = (
-            opt.gradient_conflict_diagnostics)
-        self.classification_referenced_gradient_cap = (
-            opt.classification_referenced_gradient_cap)
-        self.gradient_diagnostic_frequency = opt.loss_freq
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -243,12 +267,11 @@ class Trainer(BaseModel):
 
         if self.isTrain:
             self.loss_fn = nn.BCEWithLogitsLoss()
-            trainable_parameters = [
+            trainable_parameters = (
                 parameter
                 for parameter in self.model.parameters()
                 if parameter.requires_grad
-            ]
-            self.trainable_parameters = tuple(trainable_parameters)
+            )
             if opt.optim == 'adam':
                 self.optimizer = torch.optim.Adam(
                     trainable_parameters,
@@ -307,33 +330,38 @@ class Trainer(BaseModel):
         self.label = batch[5].cuda().float()
         token_ids = self._to_cuda(batch[3])
         token_attention_mask = self._to_cuda(batch[4])
-        if self.cpd_enabled:
+        if self.cpd_enabled or self.paired_authenticity_enabled:
             if token_ids.ndim != 3 or token_ids.shape[1] != 2:
                 raise ValueError(
-                    'CPD training requires real/fake prompt pairs')
-            self.cpd_input_ids = token_ids
-            self.cpd_attention_mask = token_attention_mask
-            batch_indices = torch.arange(
-                self.label.shape[0], device=self.label.device)
-            label_indices = self.label.long()
-            self.input_ids = token_ids[batch_indices, label_indices]
-            self.attention_mask = token_attention_mask[
-                batch_indices, label_indices]
+                    'paired-prompt training requires real/fake prompt pairs')
+            self.paired_input_ids = token_ids
+            self.paired_attention_mask = token_attention_mask
+            if self.cpd_enabled:
+                batch_indices = torch.arange(
+                    self.label.shape[0], device=self.label.device)
+                label_indices = self.label.long()
+                self.input_ids = token_ids[batch_indices, label_indices]
+                self.attention_mask = token_attention_mask[
+                    batch_indices, label_indices]
+            else:
+                self.input_ids = None
+                self.attention_mask = None
         else:
             self.input_ids = token_ids
             self.attention_mask = token_attention_mask
-            self.cpd_input_ids = None
-            self.cpd_attention_mask = None
+            self.paired_input_ids = None
+            self.paired_attention_mask = None
 
     def forward(self):
         outputs = self.model(
             self.input,
             self.input_ids,
             self.attention_mask,
-            cpd_input_ids=self.cpd_input_ids,
-            cpd_attention_mask=self.cpd_attention_mask,
+            paired_input_ids=self.paired_input_ids,
+            paired_attention_mask=self.paired_attention_mask,
             labels=self.label,
             return_cpd=self.cpd_active,
+            return_paired_authenticity=self.paired_authenticity_enabled,
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
@@ -447,35 +475,6 @@ class Trainer(BaseModel):
         )
         for name, value in anchor_diagnostics.items():
             setattr(self, name, value)
-        diagnostic_step = self.total_steps + 1
-        if self.classification_referenced_gradient_cap:
-            combined_gradients, gradient_diagnostics = (
-                classification_referenced_gradient_cap(
-                    self.loss_contrastive,
-                    self.loss_classification,
-                    self.trainable_parameters,
-                )
-            )
-            for parameter, gradient in zip(
-                self.trainable_parameters, combined_gradients
-            ):
-                parameter.grad = (
-                    None if gradient is None else gradient.detach())
-            for name, value in gradient_diagnostics.items():
-                setattr(self, name, value)
-        elif (
-            self.gradient_conflict_diagnostics
-            and diagnostic_step % self.gradient_diagnostic_frequency == 0
-        ):
-            gradient_diagnostics = gradient_conflict_diagnostics(
-                self.loss_contrastive,
-                self.loss_classification,
-                self.trainable_parameters,
-            )
-            for name, value in gradient_diagnostics.items():
-                setattr(self, name, value)
-            self.loss.backward()
-        else:
-            self.loss.backward()
+        self.loss.backward()
         self.optimizer.step()
         self.total_steps += 1

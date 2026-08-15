@@ -76,7 +76,14 @@ class ImageFolder2(datasets.DatasetFolder):
             caption = ' '
             caption_available = False
 
-        if self.opt.isTrain and cpd_is_enabled(self.opt):
+        paired_authenticity = getattr(
+            self.opt,
+            'paired_authenticity_prompt_classification',
+            False,
+        )
+        if self.opt.isTrain and (
+            cpd_is_enabled(self.opt) or paired_authenticity
+        ):
             text = build_label_caption(caption, self.opt.cates, target)
             token_texts = build_counterfactual_captions(
                 caption, self.opt.cates)

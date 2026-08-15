@@ -3,11 +3,7 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from utils.training_objectives import (
-    classification_referenced_gradient_cap,
-    gradient_conflict_diagnostics,
-    hard_fake_reweighting_loss,
-)
+from utils.training_objectives import hard_fake_reweighting_loss
 
 
 class HardFakeReweightingTests(unittest.TestCase):
@@ -83,92 +79,6 @@ class HardFakeReweightingTests(unittest.TestCase):
 
         self.assertAlmostEqual(
             diagnostics['hard_fake_logit_mean'].item(), -1.5)
-
-    def test_gradient_diagnostics_preserve_parameter_gradients(self):
-        parameter = torch.tensor([1.0, 1.0], requires_grad=True)
-        contrastive = parameter[0] + parameter[1]
-        classification = -parameter[0] + 0.5 * parameter[1]
-
-        diagnostics = gradient_conflict_diagnostics(
-            contrastive,
-            classification,
-            [parameter],
-        )
-
-        self.assertIsNone(parameter.grad)
-        self.assertAlmostEqual(
-            diagnostics['gradient_cosine'].item(),
-            -0.31622776,
-            places=6,
-        )
-        self.assertEqual(diagnostics['gradient_conflict'].item(), 1.0)
-        self.assertAlmostEqual(
-            diagnostics['gradient_contrastive_norm'].item(),
-            2 ** 0.5,
-            places=6,
-        )
-        self.assertEqual(diagnostics['gradient_shared_numel'].item(), 2.0)
-
-        (contrastive + classification).backward()
-        self.assertTrue(torch.allclose(
-            parameter.grad,
-            torch.tensor([0.0, 1.5]),
-        ))
-
-    def test_gradient_cap_matches_shared_classification_norm(self):
-        shared = torch.tensor([1.0, 1.0], requires_grad=True)
-        classifier = torch.tensor([1.0], requires_grad=True)
-        contrastive = shared[0] + shared[1]
-        classification = (
-            -shared[0] + 0.5 * shared[1] + 2.0 * classifier[0])
-
-        gradients, diagnostics = (
-            classification_referenced_gradient_cap(
-                contrastive,
-                classification,
-                [shared, classifier],
-            )
-        )
-
-        self.assertTrue(torch.allclose(
-            gradients[0],
-            torch.tensor([-0.20943058, 1.2905694]),
-        ))
-        self.assertTrue(torch.allclose(
-            gradients[1],
-            torch.tensor([2.0]),
-        ))
-        self.assertAlmostEqual(
-            diagnostics['gradient_contrastive_scale'].item(),
-            0.7905694,
-            places=6,
-        )
-        self.assertAlmostEqual(
-            diagnostics['gradient_scaled_contrastive_norm'].item(),
-            diagnostics['gradient_classification_norm'].item(),
-            places=6,
-        )
-
-    def test_gradient_cap_leaves_smaller_contrastive_gradient_unchanged(self):
-        parameter = torch.tensor([1.0, 1.0], requires_grad=True)
-        contrastive = parameter[0] + parameter[1]
-        classification = parameter[0] + 2.0 * parameter[1]
-
-        gradients, diagnostics = (
-            classification_referenced_gradient_cap(
-                contrastive,
-                classification,
-                [parameter],
-            )
-        )
-
-        self.assertTrue(torch.allclose(
-            gradients[0],
-            torch.tensor([2.0, 3.0]),
-        ))
-        self.assertEqual(
-            diagnostics['gradient_contrastive_scale'].item(), 1.0)
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -28,10 +28,12 @@ from scripts.validate import validate
 RETIRED_TRAINING_FLAGS = {
     '--augmentation_dro_weight',
     '--balanced_bias_calibration',
+    '--classification_referenced_gradient_cap',
     '--degradation_consistency_weight',
     '--degradation_scale',
     '--ema_decay',
     '--gradient_accumulation_steps',
+    '--gradient_conflict_diagnostics',
     '--gradient_conflict_projection',
     '--hard_fake_semantic_coverage',
     '--gate_loss_weight',
@@ -130,9 +132,14 @@ def discover_evaluation_sets(test_root):
 
 
 def format_training_losses(model):
+    text_loss_name = (
+        'paired_authenticity'
+        if getattr(model, 'paired_authenticity_enabled', False)
+        else 'contrastive'
+    )
     text = (
         f'loss={model.loss.item():.6f} '
-        f'contrastive={model.loss_contrastive.item():.6f} '
+        f'{text_loss_name}={model.loss_contrastive.item():.6f} '
         f'classification={model.loss_classification.item():.6f} '
         f'logit_real={model.real_logit_mean.item():.6f} '
         f'logit_fake={model.fake_logit_mean.item():.6f}'
@@ -160,23 +167,6 @@ def format_training_losses(model):
             f' hard_fake_logit_mean='
             f'{model.hard_fake_logit_mean.item():.6f}'
         )
-    if getattr(model, 'gradient_conflict_diagnostics', False):
-        text += (
-            f' grad_cos={model.gradient_cosine.item():.6f}'
-            f' grad_conflict={model.gradient_conflict.item():.0f}'
-            f' grad_contrastive_norm='
-            f'{model.gradient_contrastive_norm.item():.6f}'
-            f' grad_classification_norm='
-            f'{model.gradient_classification_norm.item():.6f}'
-            f' grad_shared_numel={model.gradient_shared_numel.item():.0f}'
-        )
-        if getattr(model, 'classification_referenced_gradient_cap', False):
-            text += (
-                f' grad_contrastive_scale='
-                f'{model.gradient_contrastive_scale.item():.6f}'
-                f' grad_scaled_contrastive_norm='
-                f'{model.gradient_scaled_contrastive_norm.item():.6f}'
-            )
     return text
 
 

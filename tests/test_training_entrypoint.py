@@ -66,55 +66,21 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('hard_fake_selected=1', text)
         self.assertIn('hard_fake_total=1', text)
 
-    def test_formats_gradient_conflict_diagnostics(self):
+    def test_formats_paired_authenticity_loss(self):
         value = SimpleNamespace(item=lambda: 1.25)
-        conflict = SimpleNamespace(item=lambda: 1.0)
         model = SimpleNamespace(
             loss=value,
             loss_contrastive=value,
             loss_classification=value,
             real_logit_mean=value,
             fake_logit_mean=value,
-            gradient_conflict_diagnostics=True,
-            gradient_cosine=value,
-            gradient_conflict=conflict,
-            gradient_contrastive_norm=value,
-            gradient_classification_norm=value,
-            gradient_shared_numel=value,
+            paired_authenticity_enabled=True,
         )
 
         text = format_training_losses(model)
 
-        self.assertIn('grad_cos=1.250000', text)
-        self.assertIn('grad_conflict=1', text)
-        self.assertIn('grad_contrastive_norm=1.250000', text)
-        self.assertIn('grad_classification_norm=1.250000', text)
-        self.assertIn('grad_shared_numel=1', text)
-
-    def test_formats_gradient_cap_diagnostics(self):
-        value = SimpleNamespace(item=lambda: 1.25)
-        conflict = SimpleNamespace(item=lambda: 1.0)
-        model = SimpleNamespace(
-            loss=value,
-            loss_contrastive=value,
-            loss_classification=value,
-            real_logit_mean=value,
-            fake_logit_mean=value,
-            gradient_conflict_diagnostics=True,
-            classification_referenced_gradient_cap=True,
-            gradient_cosine=value,
-            gradient_conflict=conflict,
-            gradient_contrastive_norm=value,
-            gradient_classification_norm=value,
-            gradient_shared_numel=value,
-            gradient_contrastive_scale=value,
-            gradient_scaled_contrastive_norm=value,
-        )
-
-        text = format_training_losses(model)
-
-        self.assertIn('grad_contrastive_scale=1.250000', text)
-        self.assertIn('grad_scaled_contrastive_norm=1.250000', text)
+        self.assertIn('paired_authenticity=1.250000', text)
+        self.assertNotIn('contrastive=', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
@@ -125,6 +91,8 @@ class TrainingEntrypointTests(unittest.TestCase):
                 '--degradation_consistency_weight=1',
                 '--degradation_scale=0.75',
                 '--ema_decay=0.99',
+                '--classification_referenced_gradient_cap',
+                '--gradient_conflict_diagnostics',
                 '--hard_fake_semantic_coverage',
                 '--gradient_conflict_projection',
                 '--residual_vib',
