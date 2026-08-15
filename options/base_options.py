@@ -49,7 +49,9 @@ def build_experiment_name(opt, timestamp=None):
     if opt.hard_fake_loss_weight > 0:
         configuration_parts.append(
             f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
-    if getattr(opt, 'gradient_conflict_diagnostics', False):
+    if getattr(opt, 'gradient_conflict_projection', False):
+        configuration_parts.append('cgp')
+    elif getattr(opt, 'gradient_conflict_diagnostics', False):
         configuration_parts.append('gcd')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
@@ -191,6 +193,14 @@ class BaseOptions:
                 'shared trainable parameters at --loss_freq steps'
             ),
         )
+        parser.add_argument(
+            '--gradient_conflict_projection',
+            action='store_true',
+            help=(
+                'protect classification by projecting away only opposing '
+                'contrastive gradients on shared trainable parameters'
+            ),
+        )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True
@@ -254,6 +264,17 @@ class BaseOptions:
             raise ValueError('--hard_fake_loss_weight cannot be negative')
         if not 0 < opt.hard_fake_fraction < 1:
             raise ValueError('--hard_fake_fraction must be in (0, 1)')
+        if opt.gradient_conflict_projection:
+            if (
+                opt.anchor_loss_weight > 0
+                or opt.cpd_direction_weight > 0
+                or opt.cpd_content_weight > 0
+                or opt.hard_fake_loss_weight > 0
+            ):
+                raise ValueError(
+                    '--gradient_conflict_projection must be tested alone '
+                    'without SLAR, CPD, or HFR')
+            opt.gradient_conflict_diagnostics = True
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

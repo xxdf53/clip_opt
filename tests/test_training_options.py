@@ -17,6 +17,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.hard_fake_loss_weight, 0.0)
         self.assertEqual(args.hard_fake_fraction, 0.25)
         self.assertFalse(args.gradient_conflict_diagnostics)
+        self.assertFalse(args.gradient_conflict_projection)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -70,6 +71,16 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260816-120000')
 
         self.assertTrue(name.endswith('__gcd'))
+
+    def test_compact_name_records_gradient_conflict_projection(self):
+        args = self.parse([
+            '--name', 'gradient_projection',
+            '--gradient_conflict_projection',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260816-130000')
+
+        self.assertTrue(name.endswith('__cgp'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])

@@ -91,6 +91,31 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('grad_classification_norm=1.250000', text)
         self.assertIn('grad_shared_numel=1', text)
 
+    def test_formats_gradient_projection_diagnostics(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        conflict = SimpleNamespace(item=lambda: 1.0)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            real_logit_mean=value,
+            fake_logit_mean=value,
+            gradient_conflict_diagnostics=True,
+            gradient_conflict_projection=True,
+            gradient_cosine=value,
+            gradient_conflict=conflict,
+            gradient_contrastive_norm=value,
+            gradient_classification_norm=value,
+            gradient_shared_numel=value,
+            gradient_projection_applied=conflict,
+            gradient_projection_scale=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('grad_projected=1', text)
+        self.assertIn('grad_projection_scale=1.250000', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([

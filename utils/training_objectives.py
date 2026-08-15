@@ -134,24 +134,12 @@ def hard_fake_reweighting_loss(
     return loss, diagnostics
 
 
-def gradient_conflict_diagnostics(first_loss, second_loss, parameters):
-    """Measure gradient alignment without modifying parameter gradients."""
-    parameters = tuple(
-        parameter for parameter in parameters if parameter.requires_grad)
-    first_gradients = torch.autograd.grad(
-        first_loss,
-        parameters,
-        retain_graph=True,
-        allow_unused=True,
-    )
-    second_gradients = torch.autograd.grad(
-        second_loss,
-        parameters,
-        retain_graph=True,
-        allow_unused=True,
-    )
-
-    dot_product = first_loss.detach().new_zeros((), dtype=torch.float32)
+def _gradient_statistics(
+    first_gradients,
+    second_gradients,
+    reference_loss,
+):
+    dot_product = reference_loss.detach().new_zeros((), dtype=torch.float32)
     first_squared_norm = dot_product.clone()
     second_squared_norm = dot_product.clone()
     shared_numel = 0
@@ -177,13 +165,94 @@ def gradient_conflict_diagnostics(first_loss, second_loss, parameters):
     denominator = (first_norm * second_norm).clamp_min(
         torch.finfo(dot_product.dtype).eps)
     cosine = dot_product / denominator
-    return {
+    diagnostics = {
         'gradient_cosine': cosine,
         'gradient_conflict': (dot_product < 0).to(dot_product.dtype),
         'gradient_contrastive_norm': first_norm,
         'gradient_classification_norm': second_norm,
         'gradient_shared_numel': dot_product.new_tensor(float(shared_numel)),
     }
+    return diagnostics, dot_product, second_squared_norm
+
+
+def gradient_conflict_diagnostics(first_loss, second_loss, parameters):
+    """Measure gradient alignment without modifying parameter gradients."""
+    parameters = tuple(
+        parameter for parameter in parameters if parameter.requires_grad)
+    first_gradients = torch.autograd.grad(
+        first_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    second_gradients = torch.autograd.grad(
+        second_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    diagnostics, _, _ = _gradient_statistics(
+        first_gradients,
+        second_gradients,
+        first_loss,
+    )
+    return diagnostics
+
+
+def classification_protected_gradient_projection(
+    contrastive_loss,
+    classification_loss,
+    parameters,
+):
+    """Project only the contrastive gradient when it opposes classification."""
+    parameters = tuple(
+        parameter for parameter in parameters if parameter.requires_grad)
+    contrastive_gradients = torch.autograd.grad(
+        contrastive_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    classification_gradients = torch.autograd.grad(
+        classification_loss,
+        parameters,
+        allow_unused=True,
+    )
+    diagnostics, dot_product, classification_squared_norm = (
+        _gradient_statistics(
+            contrastive_gradients,
+            classification_gradients,
+            contrastive_loss,
+        )
+    )
+
+    projection_scale = torch.where(
+        dot_product < 0,
+        dot_product / classification_squared_norm.clamp_min(
+            torch.finfo(dot_product.dtype).eps),
+        dot_product.new_zeros(()),
+    )
+    combined_gradients = []
+    for contrastive_gradient, classification_gradient in zip(
+        contrastive_gradients, classification_gradients
+    ):
+        if contrastive_gradient is None:
+            combined_gradients.append(classification_gradient)
+        elif classification_gradient is None:
+            combined_gradients.append(contrastive_gradient)
+        else:
+            projected_contrastive = (
+                contrastive_gradient
+                - projection_scale.to(contrastive_gradient.dtype)
+                * classification_gradient
+            )
+            combined_gradients.append(
+                projected_contrastive + classification_gradient)
+
+    diagnostics['gradient_projection_applied'] = diagnostics[
+        'gradient_conflict']
+    diagnostics['gradient_projection_scale'] = -projection_scale
+    return tuple(combined_gradients), diagnostics
 
 
 def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):

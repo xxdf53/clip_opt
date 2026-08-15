@@ -169,6 +169,13 @@ def format_training_losses(model):
             f'{model.gradient_classification_norm.item():.6f}'
             f' grad_shared_numel={model.gradient_shared_numel.item():.0f}'
         )
+        if getattr(model, 'gradient_conflict_projection', False):
+            text += (
+                f' grad_projected='
+                f'{model.gradient_projection_applied.item():.0f}'
+                f' grad_projection_scale='
+                f'{model.gradient_projection_scale.item():.6f}'
+            )
     return text
 
 

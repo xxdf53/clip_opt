@@ -92,6 +92,20 @@ python scripts/train.py [baseline arguments] \
   --gradient_conflict_diagnostics --loss_freq 10
 ```
 
+Classification-Protected Gradient Projection (CGP) uses that signal during
+training. When the two gradients conflict, it projects only the contrastive
+gradient off the classification gradient before combining them. Classification
+and classifier-head gradients remain intact; aligned gradients are unchanged.
+CGP is a standalone experiment and cannot be combined with HFR, SLAR, or CPD:
+
+```bash
+python scripts/train.py [baseline arguments] \
+  --gradient_conflict_projection --loss_freq 10
+```
+
+CGP adds no parameters and does not change checkpoint loading or image-only
+inference.
+
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,

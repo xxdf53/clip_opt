@@ -7,6 +7,7 @@ from transformers import CLIPModel
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
 from utils.training_objectives import (
+    classification_protected_gradient_projection,
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
@@ -215,6 +216,7 @@ class Trainer(BaseModel):
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
         self.gradient_conflict_diagnostics = (
             opt.gradient_conflict_diagnostics)
+        self.gradient_conflict_projection = opt.gradient_conflict_projection
         self.gradient_diagnostic_frequency = opt.loss_freq
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
@@ -240,11 +242,12 @@ class Trainer(BaseModel):
 
         if self.isTrain:
             self.loss_fn = nn.BCEWithLogitsLoss()
-            trainable_parameters = (
+            trainable_parameters = [
                 parameter
                 for parameter in self.model.parameters()
                 if parameter.requires_grad
-            )
+            ]
+            self.trainable_parameters = tuple(trainable_parameters)
             if opt.optim == 'adam':
                 self.optimizer = torch.optim.Adam(
                     trainable_parameters,
@@ -444,17 +447,34 @@ class Trainer(BaseModel):
         for name, value in anchor_diagnostics.items():
             setattr(self, name, value)
         diagnostic_step = self.total_steps + 1
-        if (
+        if self.gradient_conflict_projection:
+            combined_gradients, gradient_diagnostics = (
+                classification_protected_gradient_projection(
+                    self.loss_contrastive,
+                    self.loss_classification,
+                    self.trainable_parameters,
+                )
+            )
+            for parameter, gradient in zip(
+                self.trainable_parameters, combined_gradients
+            ):
+                parameter.grad = (
+                    None if gradient is None else gradient.detach())
+            for name, value in gradient_diagnostics.items():
+                setattr(self, name, value)
+        elif (
             self.gradient_conflict_diagnostics
             and diagnostic_step % self.gradient_diagnostic_frequency == 0
         ):
             gradient_diagnostics = gradient_conflict_diagnostics(
                 self.loss_contrastive,
                 self.loss_classification,
-                self.model.parameters(),
+                self.trainable_parameters,
             )
             for name, value in gradient_diagnostics.items():
                 setattr(self, name, value)
-        self.loss.backward()
+            self.loss.backward()
+        else:
+            self.loss.backward()
         self.optimizer.step()
         self.total_steps += 1

@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from utils.training_objectives import (
+    classification_protected_gradient_projection,
     gradient_conflict_diagnostics,
     hard_fake_reweighting_loss,
 )
@@ -113,6 +114,59 @@ class HardFakeReweightingTests(unittest.TestCase):
             parameter.grad,
             torch.tensor([0.0, 1.5]),
         ))
+
+    def test_projection_removes_only_opposing_contrastive_component(self):
+        shared = torch.tensor([1.0, 1.0], requires_grad=True)
+        classifier = torch.tensor([1.0], requires_grad=True)
+        contrastive = shared[0] + shared[1]
+        classification = (
+            -shared[0] + 0.5 * shared[1] + 2.0 * classifier[0])
+
+        gradients, diagnostics = (
+            classification_protected_gradient_projection(
+                contrastive,
+                classification,
+                [shared, classifier],
+            )
+        )
+
+        self.assertTrue(torch.allclose(
+            gradients[0],
+            torch.tensor([-0.4, 1.7]),
+        ))
+        self.assertTrue(torch.allclose(
+            gradients[1],
+            torch.tensor([2.0]),
+        ))
+        self.assertEqual(
+            diagnostics['gradient_projection_applied'].item(), 1.0)
+        self.assertAlmostEqual(
+            diagnostics['gradient_projection_scale'].item(),
+            0.4,
+            places=6,
+        )
+
+    def test_projection_leaves_aligned_gradient_sum_unchanged(self):
+        parameter = torch.tensor([1.0, 1.0], requires_grad=True)
+        contrastive = parameter[0] + parameter[1]
+        classification = parameter[0] + 2.0 * parameter[1]
+
+        gradients, diagnostics = (
+            classification_protected_gradient_projection(
+                contrastive,
+                classification,
+                [parameter],
+            )
+        )
+
+        self.assertTrue(torch.allclose(
+            gradients[0],
+            torch.tensor([2.0, 3.0]),
+        ))
+        self.assertEqual(
+            diagnostics['gradient_projection_applied'].item(), 0.0)
+        self.assertEqual(
+            diagnostics['gradient_projection_scale'].item(), 0.0)
 
 
 if __name__ == '__main__':
