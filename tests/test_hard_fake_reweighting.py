@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from utils.training_objectives import (
-    classification_protected_gradient_projection,
+    classification_referenced_gradient_cap,
     gradient_conflict_diagnostics,
     hard_fake_reweighting_loss,
 )
@@ -115,7 +115,7 @@ class HardFakeReweightingTests(unittest.TestCase):
             torch.tensor([0.0, 1.5]),
         ))
 
-    def test_projection_removes_only_opposing_contrastive_component(self):
+    def test_gradient_cap_matches_shared_classification_norm(self):
         shared = torch.tensor([1.0, 1.0], requires_grad=True)
         classifier = torch.tensor([1.0], requires_grad=True)
         contrastive = shared[0] + shared[1]
@@ -123,7 +123,7 @@ class HardFakeReweightingTests(unittest.TestCase):
             -shared[0] + 0.5 * shared[1] + 2.0 * classifier[0])
 
         gradients, diagnostics = (
-            classification_protected_gradient_projection(
+            classification_referenced_gradient_cap(
                 contrastive,
                 classification,
                 [shared, classifier],
@@ -132,27 +132,30 @@ class HardFakeReweightingTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(
             gradients[0],
-            torch.tensor([-0.4, 1.7]),
+            torch.tensor([-0.20943058, 1.2905694]),
         ))
         self.assertTrue(torch.allclose(
             gradients[1],
             torch.tensor([2.0]),
         ))
-        self.assertEqual(
-            diagnostics['gradient_projection_applied'].item(), 1.0)
         self.assertAlmostEqual(
-            diagnostics['gradient_projection_scale'].item(),
-            0.4,
+            diagnostics['gradient_contrastive_scale'].item(),
+            0.7905694,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            diagnostics['gradient_scaled_contrastive_norm'].item(),
+            diagnostics['gradient_classification_norm'].item(),
             places=6,
         )
 
-    def test_projection_leaves_aligned_gradient_sum_unchanged(self):
+    def test_gradient_cap_leaves_smaller_contrastive_gradient_unchanged(self):
         parameter = torch.tensor([1.0, 1.0], requires_grad=True)
         contrastive = parameter[0] + parameter[1]
         classification = parameter[0] + 2.0 * parameter[1]
 
         gradients, diagnostics = (
-            classification_protected_gradient_projection(
+            classification_referenced_gradient_cap(
                 contrastive,
                 classification,
                 [parameter],
@@ -164,9 +167,7 @@ class HardFakeReweightingTests(unittest.TestCase):
             torch.tensor([2.0, 3.0]),
         ))
         self.assertEqual(
-            diagnostics['gradient_projection_applied'].item(), 0.0)
-        self.assertEqual(
-            diagnostics['gradient_projection_scale'].item(), 0.0)
+            diagnostics['gradient_contrastive_scale'].item(), 1.0)
 
 
 if __name__ == '__main__':

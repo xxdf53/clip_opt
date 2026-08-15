@@ -49,8 +49,8 @@ def build_experiment_name(opt, timestamp=None):
     if opt.hard_fake_loss_weight > 0:
         configuration_parts.append(
             f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
-    if getattr(opt, 'gradient_conflict_projection', False):
-        configuration_parts.append('cgp')
+    if getattr(opt, 'classification_referenced_gradient_cap', False):
+        configuration_parts.append('crgc')
     elif getattr(opt, 'gradient_conflict_diagnostics', False):
         configuration_parts.append('gcd')
     configuration = '__'.join(configuration_parts)
@@ -194,11 +194,11 @@ class BaseOptions:
             ),
         )
         parser.add_argument(
-            '--gradient_conflict_projection',
+            '--classification_referenced_gradient_cap',
             action='store_true',
             help=(
-                'protect classification by projecting away only opposing '
-                'contrastive gradients on shared trainable parameters'
+                'cap the contrastive gradient at the classification gradient '
+                'norm on shared trainable parameters'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -264,7 +264,7 @@ class BaseOptions:
             raise ValueError('--hard_fake_loss_weight cannot be negative')
         if not 0 < opt.hard_fake_fraction < 1:
             raise ValueError('--hard_fake_fraction must be in (0, 1)')
-        if opt.gradient_conflict_projection:
+        if opt.classification_referenced_gradient_cap:
             if (
                 opt.anchor_loss_weight > 0
                 or opt.cpd_direction_weight > 0
@@ -272,7 +272,8 @@ class BaseOptions:
                 or opt.hard_fake_loss_weight > 0
             ):
                 raise ValueError(
-                    '--gradient_conflict_projection must be tested alone '
+                    '--classification_referenced_gradient_cap must be tested '
+                    'alone '
                     'without SLAR, CPD, or HFR')
             opt.gradient_conflict_diagnostics = True
         opt.name = build_experiment_name(opt)

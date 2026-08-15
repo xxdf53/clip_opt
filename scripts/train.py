@@ -32,6 +32,7 @@ RETIRED_TRAINING_FLAGS = {
     '--degradation_scale',
     '--ema_decay',
     '--gradient_accumulation_steps',
+    '--gradient_conflict_projection',
     '--hard_fake_semantic_coverage',
     '--gate_loss_weight',
     '--gate_supervision_weight',
@@ -169,12 +170,12 @@ def format_training_losses(model):
             f'{model.gradient_classification_norm.item():.6f}'
             f' grad_shared_numel={model.gradient_shared_numel.item():.0f}'
         )
-        if getattr(model, 'gradient_conflict_projection', False):
+        if getattr(model, 'classification_referenced_gradient_cap', False):
             text += (
-                f' grad_projected='
-                f'{model.gradient_projection_applied.item():.0f}'
-                f' grad_projection_scale='
-                f'{model.gradient_projection_scale.item():.6f}'
+                f' grad_contrastive_scale='
+                f'{model.gradient_contrastive_scale.item():.6f}'
+                f' grad_scaled_contrastive_norm='
+                f'{model.gradient_scaled_contrastive_norm.item():.6f}'
             )
     return text
 

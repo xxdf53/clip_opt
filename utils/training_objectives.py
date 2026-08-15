@@ -199,12 +199,12 @@ def gradient_conflict_diagnostics(first_loss, second_loss, parameters):
     return diagnostics
 
 
-def classification_protected_gradient_projection(
+def classification_referenced_gradient_cap(
     contrastive_loss,
     classification_loss,
     parameters,
 ):
-    """Project only the contrastive gradient when it opposes classification."""
+    """Cap the shared contrastive gradient at the classification norm."""
     parameters = tuple(
         parameter for parameter in parameters if parameter.requires_grad)
     contrastive_gradients = torch.autograd.grad(
@@ -218,7 +218,7 @@ def classification_protected_gradient_projection(
         parameters,
         allow_unused=True,
     )
-    diagnostics, dot_product, classification_squared_norm = (
+    diagnostics, _, _ = (
         _gradient_statistics(
             contrastive_gradients,
             classification_gradients,
@@ -226,11 +226,12 @@ def classification_protected_gradient_projection(
         )
     )
 
-    projection_scale = torch.where(
-        dot_product < 0,
-        dot_product / classification_squared_norm.clamp_min(
-            torch.finfo(dot_product.dtype).eps),
-        dot_product.new_zeros(()),
+    contrastive_norm = diagnostics['gradient_contrastive_norm']
+    classification_norm = diagnostics['gradient_classification_norm']
+    contrastive_scale = torch.minimum(
+        contrastive_norm.new_ones(()),
+        classification_norm / contrastive_norm.clamp_min(
+            torch.finfo(contrastive_norm.dtype).eps),
     )
     combined_gradients = []
     for contrastive_gradient, classification_gradient in zip(
@@ -241,17 +242,14 @@ def classification_protected_gradient_projection(
         elif classification_gradient is None:
             combined_gradients.append(contrastive_gradient)
         else:
-            projected_contrastive = (
-                contrastive_gradient
-                - projection_scale.to(contrastive_gradient.dtype)
-                * classification_gradient
-            )
             combined_gradients.append(
-                projected_contrastive + classification_gradient)
+                contrastive_scale.to(contrastive_gradient.dtype)
+                * contrastive_gradient
+                + classification_gradient)
 
-    diagnostics['gradient_projection_applied'] = diagnostics[
-        'gradient_conflict']
-    diagnostics['gradient_projection_scale'] = -projection_scale
+    diagnostics['gradient_contrastive_scale'] = contrastive_scale
+    diagnostics['gradient_scaled_contrastive_norm'] = (
+        contrastive_scale * contrastive_norm)
     return tuple(combined_gradients), diagnostics
 
 

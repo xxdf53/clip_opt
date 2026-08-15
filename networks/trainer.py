@@ -7,7 +7,7 @@ from transformers import CLIPModel
 from networks.base_model import BaseModel
 from utils.cpd import cpd_is_enabled, cpd_schedule_scale
 from utils.training_objectives import (
-    classification_protected_gradient_projection,
+    classification_referenced_gradient_cap,
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
@@ -216,7 +216,8 @@ class Trainer(BaseModel):
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
         self.gradient_conflict_diagnostics = (
             opt.gradient_conflict_diagnostics)
-        self.gradient_conflict_projection = opt.gradient_conflict_projection
+        self.classification_referenced_gradient_cap = (
+            opt.classification_referenced_gradient_cap)
         self.gradient_diagnostic_frequency = opt.loss_freq
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
@@ -447,9 +448,9 @@ class Trainer(BaseModel):
         for name, value in anchor_diagnostics.items():
             setattr(self, name, value)
         diagnostic_step = self.total_steps + 1
-        if self.gradient_conflict_projection:
+        if self.classification_referenced_gradient_cap:
             combined_gradients, gradient_diagnostics = (
-                classification_protected_gradient_projection(
+                classification_referenced_gradient_cap(
                     self.loss_contrastive,
                     self.loss_classification,
                     self.trainable_parameters,
