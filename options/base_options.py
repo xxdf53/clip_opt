@@ -46,16 +46,10 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
-    if opt.hard_fake_loss_weight > 0:
-        configuration_parts.append(
-            f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
+    if getattr(opt, 'pld_lora_initialization', False):
+        configuration_parts.append('pld-lora')
     if getattr(opt, 'paired_authenticity_prompt_classification', False):
-        papc_name = (
-            'papc-hi'
-            if getattr(opt, 'paired_authenticity_head_initialization', False)
-            else 'papc'
-        )
-        configuration_parts.append(papc_name)
+        configuration_parts.append('papc')
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -64,6 +58,50 @@ def build_experiment_name(opt, timestamp=None):
     )
     base_name = _truncate_utf8(base_name, max_bytes=available_base_bytes)
     return f'{base_name}__{configuration}'
+
+
+def validate_experiment_configuration(opt):
+    """Validate active research options before creating output files."""
+    nonnegative_options = (
+        'anchor_loss_weight',
+        'cpd_direction_weight',
+        'cpd_content_weight',
+        'cpd_direction_margin',
+        'cpd_start_step',
+        'cpd_warmup_steps',
+    )
+    for name in nonnegative_options:
+        if getattr(opt, name) < 0:
+            raise ValueError(f'--{name} cannot be negative')
+    if opt.logit_anchor <= 0:
+        raise ValueError('--logit_anchor must be positive')
+    if opt.pld_lora_microbatch_size <= 0:
+        raise ValueError('--pld_lora_microbatch_size must be positive')
+
+    auxiliary_objective_enabled = (
+        opt.anchor_loss_weight > 0
+        or opt.cpd_direction_weight > 0
+        or opt.cpd_content_weight > 0
+    )
+    if opt.paired_authenticity_prompt_classification and (
+        auxiliary_objective_enabled
+    ):
+        raise ValueError(
+            '--paired_authenticity_prompt_classification must be tested '
+            'alone without SLAR or CPD')
+
+    if not opt.pld_lora_initialization:
+        return
+    if not opt.train_manifest:
+        raise ValueError('--pld_lora_initialization requires --train_manifest')
+    if getattr(opt, 'continue_train', False):
+        raise ValueError('--pld_lora_initialization cannot resume a checkpoint')
+    if opt.paired_authenticity_prompt_classification or (
+        auxiliary_objective_enabled
+    ):
+        raise ValueError(
+            '--pld_lora_initialization must be tested alone without '
+            'PAPC, SLAR, or CPD')
 
 
 class BaseOptions:
@@ -174,21 +212,6 @@ class BaseOptions:
             help='steps used to linearly ramp CPD to its configured weight',
         )
         parser.add_argument(
-            '--hard_fake_loss_weight',
-            type=float,
-            default=0.0,
-            help=(
-                'bias-neutral auxiliary BCE weight for the globally '
-                'lowest-logit fake samples; 0 disables hard-fake reweighting'
-            ),
-        )
-        parser.add_argument(
-            '--hard_fake_fraction',
-            type=float,
-            default=0.25,
-            help='fraction of fake samples selected from each global batch',
-        )
-        parser.add_argument(
             '--paired_authenticity_prompt_classification',
             action='store_true',
             help=(
@@ -197,12 +220,18 @@ class BaseOptions:
             ),
         )
         parser.add_argument(
-            '--paired_authenticity_head_initialization',
+            '--pld_lora_initialization',
             action='store_true',
             help=(
-                'initialize the binary classifier from the frozen '
-                'fake-minus-real text direction before PAPC training'
+                'initialize vision LoRA A from patchwise real/fake '
+                'activation differences in the first manifest batch'
             ),
+        )
+        parser.add_argument(
+            '--pld_lora_microbatch_size',
+            type=int,
+            default=8,
+            help='memory-only microbatch size for PLD-LoRA calibration',
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
@@ -249,40 +278,7 @@ class BaseOptions:
         opt = self.gather_options()
         opt.isTrain = self.isTrain   # train or test
         opt.imgroot = opt.dataroot
-        if opt.anchor_loss_weight < 0:
-            raise ValueError('--anchor_loss_weight cannot be negative')
-        if opt.logit_anchor <= 0:
-            raise ValueError('--logit_anchor must be positive')
-        if opt.cpd_direction_weight < 0:
-            raise ValueError('--cpd_direction_weight cannot be negative')
-        if opt.cpd_content_weight < 0:
-            raise ValueError('--cpd_content_weight cannot be negative')
-        if opt.cpd_direction_margin < 0:
-            raise ValueError('--cpd_direction_margin cannot be negative')
-        if opt.cpd_start_step < 0:
-            raise ValueError('--cpd_start_step cannot be negative')
-        if opt.cpd_warmup_steps < 0:
-            raise ValueError('--cpd_warmup_steps cannot be negative')
-        if opt.hard_fake_loss_weight < 0:
-            raise ValueError('--hard_fake_loss_weight cannot be negative')
-        if not 0 < opt.hard_fake_fraction < 1:
-            raise ValueError('--hard_fake_fraction must be in (0, 1)')
-        if (
-            opt.paired_authenticity_head_initialization
-            and not opt.paired_authenticity_prompt_classification
-        ):
-            raise ValueError(
-                '--paired_authenticity_head_initialization requires '
-                '--paired_authenticity_prompt_classification')
-        if opt.paired_authenticity_prompt_classification and (
-            opt.anchor_loss_weight > 0
-            or opt.cpd_direction_weight > 0
-            or opt.cpd_content_weight > 0
-            or opt.hard_fake_loss_weight > 0
-        ):
-            raise ValueError(
-                '--paired_authenticity_prompt_classification must be tested '
-                'alone without SLAR, CPD, or HFR')
+        validate_experiment_configuration(opt)
         opt.name = build_experiment_name(opt)
 
         if opt.suffix:

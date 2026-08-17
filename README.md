@@ -67,21 +67,6 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
-Bias-neutral Hard-Fake Reweighting (HFR) is an optional training-only
-objective for the diffusion protocol. After multi-GPU logits are gathered, it
-selects the lowest-logit quarter of fake samples and adds their BCE once more.
-Its backward pass removes the global common-mode logit gradient, preventing the
-auxiliary loss from directly shifting the classifier bias. The original BCE
-over every sample remains unchanged:
-
-```bash
-python scripts/train.py [baseline arguments] \
-  --hard_fake_loss_weight 1.0 --hard_fake_fraction 0.25
-```
-
-HFR adds no model parameters and is disabled by default. Checkpoints and
-image-only inference therefore remain identical to the baseline architecture.
-
 Paired Authenticity Prompt Classification (PAPC) replaces instance-level
 caption matching with a two-way decision between prompts that share the same
 caption but differ in their real/fake prefix and suffix. This removes content
@@ -94,37 +79,37 @@ python scripts/train.py [baseline arguments] \
 ```
 
 PAPC is training-only, adds no model parameters, and must be tested alone
-without HFR, SLAR, or CPD. Inference remains image-only.
+without SLAR or CPD. Inference remains image-only.
 
-The optional PAPC head initialization replaces the random binary-classifier
-start with the unit-normalized fake-minus-real direction from the frozen text
-encoder. The classifier remains trainable under the original PAPC and BCE
-losses:
+Patchwise Label-Discriminative LoRA initialization (PLD-LoRA) replaces the
+random LoRA A subspace with the leading patch-token real/fake activation
+directions from the first fixed manifest batch:
 
 ```bash
 python scripts/train.py [baseline arguments] \
-  --paired_authenticity_prompt_classification \
-  --paired_authenticity_head_initialization
+  --train_manifest ./training_manifests/train.txt \
+  --data_seed 314159 \
+  --pld_lora_initialization
 ```
 
-This initialization adds no parameters, loss weight, or inference text. PAPC
-training logs report the real/fake margins and raw prompt-direction norm.
+PLD-LoRA initializes every attention q/k/v LoRA A matrix from the same
+layer-wise discriminative basis and keeps LoRA B at zero, so the initial model
+function is unchanged. It adds no parameters, loss weight, checkpoint fields,
+or inference inputs. The calibration batch must contain both classes and PLD
+must be tested alone without PAPC, SLAR, or CPD.
 
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
 gradient-accumulation emulation, PRH, SPH, RVIB, RTR, RRSD, EMA and degradation
-consistency, real-only HFR compensation, balanced bias calibration,
+consistency, HFR variants, balanced bias calibration,
 classification-protected gradient projection, and classification-referenced
-gradient capping) were
-removed from the active implementation. Semantic-coverage HFR was also removed
-after valid captions produced diverse selections without improving diffusion
-generalization. Normalized-direction PAPC was removed after reducing ranking
-quality without stabilizing the three-seed result. Historical checkpoints that
-did not change the model structure
+gradient capping, PAPC head initialization, and normalized-direction PAPC) were
+removed from the active implementation after failing their paired diffusion
+experiments. Historical checkpoints that did not change the model structure
 remain load-compatible; reproducing removed training paths requires the
-corresponding Git revision. Baseline, PAPC, HFR, SLAR, CPD and standard LoRA
-checkpoints remain compatible.
+corresponding Git revision. Baseline, PAPC, SLAR, CPD, PLD-LoRA, and standard
+LoRA checkpoints share the same inference architecture.
 
 ### 2) Inference / Testing
 

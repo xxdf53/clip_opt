@@ -2,20 +2,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
-from transformers import AutoTokenizer, CLIPModel
+from transformers import CLIPModel
 
 from networks.base_model import BaseModel
 from utils.cpd import (
-    build_counterfactual_captions,
     cpd_is_enabled,
     cpd_schedule_scale,
 )
+from utils.pld_lora import initialize_patchwise_discriminant_lora
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
-    hard_fake_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -77,36 +76,6 @@ class CLIPModel_lora(nn.Module):
             return_dict=True,
         )
         return self.model.text_projection(text_outputs.pooler_output)
-
-    @torch.no_grad()
-    def initialize_classifier_from_authenticity_prompts(
-        self,
-        input_ids,
-        attention_mask,
-    ):
-        if input_ids.ndim != 2 or input_ids.shape[0] != 2:
-            raise ValueError(
-                'classifier initialization requires one real and one fake '
-                'prompt')
-        text_embeddings = F.normalize(
-            self.encode_text(input_ids, attention_mask), p=2, dim=-1)
-        real_embedding, fake_embedding = text_embeddings.unbind(dim=0)
-        authenticity_direction = fake_embedding - real_embedding
-        direction_norm = authenticity_direction.norm(p=2)
-        if direction_norm <= torch.finfo(authenticity_direction.dtype).eps:
-            raise ValueError('real and fake prompts produce no text direction')
-        authenticity_direction = authenticity_direction / direction_norm
-        classifier = self.model.fc
-        if classifier.out_features != 1:
-            raise ValueError(
-                'authenticity initialization requires one classifier output')
-        if authenticity_direction.numel() != classifier.in_features:
-            raise ValueError(
-                'text direction does not match classifier feature dimension')
-        classifier.weight.copy_(authenticity_direction.unsqueeze(0))
-        if classifier.bias is not None:
-            classifier.bias.zero_()
-        return direction_norm
 
     def _encode_image_outputs(self, images, disable_lora=False):
         def run_vision_tower():
@@ -257,12 +226,11 @@ class CLIPModel_lora(nn.Module):
         if not return_cpd:
             return outputs
 
-        if return_cpd:
-            with torch.no_grad():
-                frozen_features = self.encode_image(images, disable_lora=True)
-            frozen_embeddings = F.normalize(frozen_features, p=2, dim=-1)
-            auxiliary['image_residual'] = (
-                image_embeddings - frozen_embeddings.detach())
+        with torch.no_grad():
+            frozen_features = self.encode_image(images, disable_lora=True)
+        frozen_embeddings = F.normalize(frozen_features, p=2, dim=-1)
+        auxiliary['image_residual'] = (
+            image_embeddings - frozen_embeddings.detach())
         return outputs + (auxiliary,)
 
 
@@ -284,11 +252,8 @@ class Trainer(BaseModel):
         self.cpd_enabled = cpd_is_enabled(opt)
         self.paired_authenticity_enabled = (
             opt.paired_authenticity_prompt_classification)
-        self.paired_authenticity_head_initialization = (
-            opt.paired_authenticity_head_initialization)
-        self.hard_fake_loss_weight = opt.hard_fake_loss_weight
-        self.hard_fake_fraction = opt.hard_fake_fraction
-        self.hard_fake_enabled = self.hard_fake_loss_weight > 0
+        self.pld_lora_initialization = opt.pld_lora_initialization
+        self.pld_lora_initialized = False
         self.cpd_schedule_scale = 0.0
         self.effective_cpd_direction_weight = 0.0
         self.effective_cpd_content_weight = 0.0
@@ -299,35 +264,6 @@ class Trainer(BaseModel):
             lora_alpha=opt.lora_alpha,
             lora_dropout=opt.lora_dropout,
         )
-        if (
-            self.isTrain
-            and self.paired_authenticity_head_initialization
-            and not getattr(opt, 'continue_train', False)
-        ):
-            tokenizer = AutoTokenizer.from_pretrained(
-                opt.clip,
-                model_max_length=77,
-                padding_side='right',
-                use_fast=True,
-            )
-            tokenizer.pad_token_id = 0
-            prompts = build_counterfactual_captions('', opt.cates)
-            prompt_inputs = tokenizer(
-                prompts,
-                padding='max_length',
-                max_length=tokenizer.model_max_length,
-                truncation=True,
-                return_tensors='pt',
-            )
-            direction_norm = (
-                self.model.initialize_classifier_from_authenticity_prompts(
-                    prompt_inputs['input_ids'],
-                    prompt_inputs['attention_mask'],
-                )
-            )
-            print(
-                'Initialized classifier from authenticity prompts; '
-                f'direction_norm={direction_norm.item():.6f}')
 
         parameter_count = sum(
             parameter.numel() for parameter in self.model.parameters())
@@ -378,6 +314,37 @@ class Trainer(BaseModel):
             self.model,
             device_ids=opt.gpu_ids,
         ).cuda()
+
+    def initialize_pld_lora(self, batch):
+        """Initialize LoRA from the first fixed global training batch."""
+        if not self.pld_lora_initialization:
+            return None
+        if self.pld_lora_initialized:
+            raise RuntimeError('PLD-LoRA has already been initialized')
+
+        core_model = self.model.module
+        was_training = core_model.training
+        core_model.eval()
+        try:
+            summary = initialize_patchwise_discriminant_lora(
+                core_model,
+                images=batch[1],
+                labels=batch[5],
+                forward_images=core_model._encode_image_outputs,
+                microbatch_size=self.opt.pld_lora_microbatch_size,
+            )
+        finally:
+            core_model.train(was_training)
+
+        self.pld_lora_initialized = True
+        print(
+            'PLD-LoRA initialized: '
+            f'layers={summary.layers} modules={summary.modules} '
+            f'rank={summary.rank} real={summary.real_samples} '
+            f'fake={summary.fake_samples} '
+            f'explained_energy={summary.explained_energy:.6f}'
+        )
+        return summary
 
     def adjust_learning_rate(self, min_lr=1e-6):
         previous_lr = self.optimizer.param_groups[0]['lr']
@@ -471,24 +438,6 @@ class Trainer(BaseModel):
         self.loss = self.loss_contrastive + self.loss_classification
 
         self._update_paired_authenticity_diagnostics(zero)
-
-        self.loss_hard_fake = zero
-        if self.hard_fake_enabled:
-            hard_fake_loss, hard_fake_diagnostics = (
-                hard_fake_reweighting_loss(
-                    self.classhead,
-                    self.label,
-                    fraction=self.hard_fake_fraction,
-                )
-            )
-            self.loss_hard_fake = (
-                self.claloss
-                * self.hard_fake_loss_weight
-                * hard_fake_loss
-            )
-            self.loss = self.loss + self.loss_hard_fake
-            for name, value in hard_fake_diagnostics.items():
-                setattr(self, name, value)
 
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:

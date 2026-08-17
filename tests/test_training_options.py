@@ -1,7 +1,11 @@
 import argparse
 import unittest
 
-from options.base_options import BaseOptions, build_experiment_name
+from options.base_options import (
+    BaseOptions,
+    build_experiment_name,
+    validate_experiment_configuration,
+)
 
 
 class TrainingOptionTests(unittest.TestCase):
@@ -14,10 +18,9 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertEqual(args.anchor_loss_weight, 0.0)
         self.assertEqual(args.cpd_direction_weight, 0.0)
-        self.assertEqual(args.hard_fake_loss_weight, 0.0)
-        self.assertEqual(args.hard_fake_fraction, 0.25)
         self.assertFalse(args.paired_authenticity_prompt_classification)
-        self.assertFalse(args.paired_authenticity_head_initialization)
+        self.assertFalse(args.pld_lora_initialization)
+        self.assertEqual(args.pld_lora_microbatch_size, 8)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -51,16 +54,28 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertIn('__anchor-w0.5-t3.0__', name)
         self.assertIn('__cpd-d0.5-c0.0-m0.1-s400-w400', name)
 
-    def test_compact_name_records_hard_fake_reweighting(self):
+    def test_compact_name_records_pld_lora_initialization(self):
         args = self.parse([
-            '--name', 'hard_fake',
-            '--hard_fake_loss_weight', '1.0',
-            '--hard_fake_fraction', '0.25',
+            '--name', 'pld',
+            '--pld_lora_initialization',
         ])
 
-        name = build_experiment_name(args, timestamp='20260811-180000')
+        name = build_experiment_name(args, timestamp='20260818-120000')
 
-        self.assertTrue(name.endswith('__hfr-w1.0-q0.25'))
+        self.assertTrue(name.endswith('__pld-lora'))
+
+    def test_pld_requires_manifest_and_standalone_training(self):
+        missing_manifest = self.parse(['--pld_lora_initialization'])
+        with self.assertRaisesRegex(ValueError, 'requires --train_manifest'):
+            validate_experiment_configuration(missing_manifest)
+
+        stacked = self.parse([
+            '--pld_lora_initialization',
+            '--train_manifest', 'fixed.txt',
+            '--anchor_loss_weight', '0.5',
+        ])
+        with self.assertRaisesRegex(ValueError, 'must be tested alone'):
+            validate_experiment_configuration(stacked)
 
     def test_compact_name_records_paired_authenticity_classification(self):
         args = self.parse([
@@ -71,17 +86,6 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260817-120000')
 
         self.assertTrue(name.endswith('__papc'))
-
-    def test_compact_name_records_papc_head_initialization(self):
-        args = self.parse([
-            '--name', 'initialized_paired_authenticity',
-            '--paired_authenticity_prompt_classification',
-            '--paired_authenticity_head_initialization',
-        ])
-
-        name = build_experiment_name(args, timestamp='20260818-120000')
-
-        self.assertTrue(name.endswith('__papc-hi'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])

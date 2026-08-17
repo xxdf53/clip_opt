@@ -213,26 +213,6 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(
             auxiliary['paired_authenticity_margin'].shape, (2,))
 
-    def test_authenticity_direction_initializes_binary_classifier(self):
-        model = build_minimal_model()
-        prompt_ids = torch.tensor([
-            [1, 0],
-            [-1, 0],
-        ])
-
-        direction_norm = (
-            model.initialize_classifier_from_authenticity_prompts(
-                prompt_ids,
-                torch.ones_like(prompt_ids),
-            )
-        )
-
-        expected_direction = torch.tensor([-1.0, 0.0])
-        self.assertTrue(torch.allclose(
-            model.model.fc.weight[0], expected_direction))
-        self.assertEqual(model.model.fc.bias.item(), 0.0)
-        self.assertEqual(direction_norm.item(), 2.0)
-
     def test_cpd_and_slar_losses_favor_correct_separation(self):
         residual = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])
         direction = torch.tensor([[1.0, 0.0], [1.0, 0.0]])

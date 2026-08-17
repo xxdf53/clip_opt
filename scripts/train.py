@@ -5,6 +5,7 @@ import random
 import hashlib
 import sys
 import time
+from itertools import chain
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,72 +22,9 @@ from utils.evaluation_schedule import (
     should_evaluate,
     should_run_final_evaluation,
 )
+from utils.retired_training import reject_retired_training_flags
 from utils.util import Logger
 from scripts.validate import validate
-
-
-RETIRED_TRAINING_FLAGS = {
-    '--augmentation_dro_weight',
-    '--balanced_bias_calibration',
-    '--classification_referenced_gradient_cap',
-    '--degradation_consistency_weight',
-    '--degradation_scale',
-    '--ema_decay',
-    '--gradient_accumulation_steps',
-    '--gradient_conflict_diagnostics',
-    '--gradient_conflict_projection',
-    '--hard_fake_semantic_coverage',
-    '--gate_loss_weight',
-    '--gate_supervision_weight',
-    '--gate_target_margin',
-    '--init_baseline_checkpoint',
-    '--freeze_global_branch',
-    '--freeze_vision_lora',
-    '--global_contrastive',
-    '--global_contrastive_weight',
-    '--boundary_center_weight',
-    '--semantic_residual_weight',
-    '--spectral_band_dropout',
-    '--local_candidate_loss_weight',
-    '--local_dim',
-    '--local_dropout',
-    '--local_fusion',
-    '--local_gate_init',
-    '--local_layer',
-    '--local_pool',
-    '--logit_margin',
-    '--logit_center_loss_weight',
-    '--margin_loss_weight',
-    '--patch_residual_head',
-    '--paired_authenticity_normalize_direction',
-    '--rank_loss_weight',
-    '--residual_alpha',
-    '--residual_scale',
-    '--residual_trust_weight',
-    '--residual_vib',
-    '--rrsd_max_correction',
-    '--symmetric_prototype_head',
-    '--use_local_features',
-    '--vib_beta',
-    '--vib_cls_weight',
-    '--vib_dim',
-}
-
-
-def reject_retired_training_flags(argv=None):
-    """Prevent removed experiments from being silently ignored by the CLI."""
-    argv = sys.argv[1:] if argv is None else argv
-    used_flags = {
-        argument.split('=', 1)[0]
-        for argument in argv
-        if argument.startswith('--')
-    }
-    retired_flags = sorted(used_flags & RETIRED_TRAINING_FLAGS)
-    if retired_flags:
-        raise ValueError(
-            'retired training options are no longer supported: '
-            + ', '.join(retired_flags)
-        )
 
 
 def seed_torch(seed=1029):
@@ -170,14 +108,6 @@ def format_training_losses(model):
             f' cpd_content_align={model.cpd_content_alignment.item():.6f}'
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
-    if getattr(model, 'hard_fake_enabled', False):
-        text += (
-            f' hard_fake={model.loss_hard_fake.item():.6f}'
-            f' hard_fake_selected={model.hard_fake_selected.item():.0f}'
-            f' hard_fake_total={model.hard_fake_total.item():.0f}'
-            f' hard_fake_logit_mean='
-            f'{model.hard_fake_logit_mean.item():.6f}'
-        )
     return text
 
 
@@ -209,6 +139,18 @@ def main():
         print(f'training_manifest_samples={manifest_samples}')
         print(f'data_seed={opt.data_seed} model_seed={opt.seed}')
     model = Trainer(opt)
+    first_epoch_batches = None
+    if opt.pld_lora_initialization:
+        print(
+            'Calibrating PLD-LoRA on the first fixed global training batch; '
+            'this adds one frozen visual forward pass before training.')
+        first_epoch_iterator = iter(data_loader)
+        calibration_batch = next(first_epoch_iterator)
+        model.initialize_pld_lora(calibration_batch)
+        first_epoch_batches = chain(
+            (calibration_batch,),
+            first_epoch_iterator,
+        )
 
     def evaluate(epoch):
         print('*' * 25)
@@ -261,7 +203,12 @@ def main():
 
     for epoch in range(opt.niter):
         last_epoch = epoch
-        for batch in data_loader:
+        epoch_batches = (
+            first_epoch_batches
+            if epoch == 0 and first_epoch_batches is not None
+            else data_loader
+        )
+        for batch in epoch_batches:
             if model.total_steps >= opt.total_steps:
                 break
 

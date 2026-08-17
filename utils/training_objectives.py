@@ -84,56 +84,6 @@ def _flatten_binary_inputs(logits, labels):
     return logits, labels
 
 
-def hard_fake_reweighting_loss(
-    logits,
-    labels,
-    fraction=0.25,
-):
-    """Return a bias-neutral loss for selected hard fake samples.
-
-    The forward value is the selected fake BCE normalized by the full batch
-    size. During backward, the global logit mean is removed and restored as a
-    detached value. This keeps the auxiliary gradient's common mode at zero,
-    so HFR cannot directly update the classifier bias while still raising hard
-    fake logits relative to the rest of the batch.
-    """
-    if not 0 < fraction < 1:
-        raise ValueError(f'hard-fake fraction must be in (0, 1), got {fraction}')
-
-    logits, labels = _flatten_binary_inputs(logits, labels)
-    fake_indices = torch.nonzero(labels >= 0.5, as_tuple=False).flatten()
-    fake_count = fake_indices.numel()
-    selected_count = int(fraction * fake_count)
-    zero = logits.sum() * 0.0
-    diagnostics = {
-        'hard_fake_selected': logits.new_tensor(float(selected_count)),
-        'hard_fake_total': logits.new_tensor(float(fake_count)),
-        'hard_fake_logit_mean': logits.new_zeros(()),
-    }
-    if selected_count == 0:
-        return zero, diagnostics
-
-    fake_logits = logits[fake_indices]
-    selected_within_fake = torch.topk(
-        fake_logits.detach(),
-        k=selected_count,
-        largest=False,
-        sorted=False,
-    ).indices
-    selected_indices = fake_indices[selected_within_fake]
-    mean_logit = logits.mean()
-    bias_neutral_logits = logits - mean_logit + mean_logit.detach()
-    per_sample = F.binary_cross_entropy_with_logits(
-        bias_neutral_logits,
-        labels,
-        reduction='none',
-    )
-    loss = per_sample[selected_indices].sum() / logits.numel()
-    diagnostics['hard_fake_logit_mean'] = (
-        logits.detach()[selected_indices].mean())
-    return loss, diagnostics
-
-
 def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):
     """Keep real/fake logits near fixed symmetric targets around zero."""
     if anchor <= 0:

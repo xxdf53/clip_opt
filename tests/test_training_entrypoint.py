@@ -45,27 +45,6 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('logit_real=1.250000', text)
         self.assertIn('logit_fake=1.250000', text)
 
-    def test_formats_hard_fake_diagnostics(self):
-        value = SimpleNamespace(item=lambda: 1.25)
-        model = SimpleNamespace(
-            loss=value,
-            loss_contrastive=value,
-            loss_classification=value,
-            real_logit_mean=value,
-            fake_logit_mean=value,
-            hard_fake_enabled=True,
-            loss_hard_fake=value,
-            hard_fake_selected=value,
-            hard_fake_total=value,
-            hard_fake_logit_mean=value,
-        )
-
-        text = format_training_losses(model)
-
-        self.assertIn('hard_fake=1.250000', text)
-        self.assertIn('hard_fake_selected=1', text)
-        self.assertIn('hard_fake_total=1', text)
-
     def test_formats_paired_authenticity_loss(self):
         value = SimpleNamespace(item=lambda: 1.25)
         model = SimpleNamespace(
@@ -103,8 +82,11 @@ class TrainingEntrypointTests(unittest.TestCase):
                 '--ema_decay=0.99',
                 '--classification_referenced_gradient_cap',
                 '--gradient_conflict_diagnostics',
+                '--hard_fake_loss_weight=1',
+                '--hard_fake_fraction=0.25',
                 '--hard_fake_semantic_coverage',
                 '--gradient_conflict_projection',
+                '--paired_authenticity_head_initialization',
                 '--residual_vib',
                 '--residual_trust_weight=1',
                 '--symmetric_prototype_head',
