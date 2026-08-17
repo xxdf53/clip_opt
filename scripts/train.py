@@ -144,6 +144,16 @@ def format_training_losses(model):
         f'logit_real={model.real_logit_mean.item():.6f} '
         f'logit_fake={model.fake_logit_mean.item():.6f}'
     )
+    if getattr(model, 'paired_authenticity_enabled', False):
+        text += (
+            f' papc_margin_real={model.papc_margin_real.item():.6f}'
+            f' papc_margin_fake={model.papc_margin_fake.item():.6f}'
+            f' papc_margin_std_real='
+            f'{model.papc_margin_std_real.item():.6f}'
+            f' papc_margin_std_fake='
+            f'{model.papc_margin_std_fake.item():.6f}'
+            f' papc_direction_norm={model.papc_direction_norm.item():.6f}'
+        )
     if getattr(model, 'anchor_loss_weight', 0.0) > 0:
         text += (
             f' anchor={model.loss_anchor.item():.6f}'

@@ -135,6 +135,7 @@ class CLIPModel_lora(nn.Module):
         labels=None,
         return_cpd=False,
         return_paired_authenticity=False,
+        normalize_paired_authenticity_direction=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
@@ -163,15 +164,35 @@ class CLIPModel_lora(nn.Module):
             label_indices = labels.flatten().long()
             if label_indices.numel() != image_embeddings.shape[0]:
                 raise ValueError('PAPC labels must match the image batch')
-            authenticity_logits = torch.einsum(
-                'bd,bpd->bp', image_embeddings, paired_embeddings)
-            authenticity_logits = (
-                authenticity_logits * self.model.logit_scale.exp())
-            paired_authenticity_loss = F.cross_entropy(
-                authenticity_logits, label_indices)
+            real_embeddings, fake_embeddings = paired_embeddings.unbind(dim=1)
+            authenticity_direction = fake_embeddings - real_embeddings
+            direction_norm = authenticity_direction.norm(p=2, dim=-1)
+            if normalize_paired_authenticity_direction:
+                authenticity_direction = F.normalize(
+                    authenticity_direction, p=2, dim=-1)
+                authenticity_margin = (
+                    image_embeddings * authenticity_direction).sum(dim=-1)
+                paired_authenticity_loss = F.binary_cross_entropy_with_logits(
+                    authenticity_margin,
+                    labels.flatten().to(dtype=authenticity_margin.dtype),
+                )
+            else:
+                authenticity_logits = torch.einsum(
+                    'bd,bpd->bp', image_embeddings, paired_embeddings)
+                authenticity_logits = (
+                    authenticity_logits * self.model.logit_scale.exp())
+                authenticity_margin = (
+                    authenticity_logits[:, 1] - authenticity_logits[:, 0])
+                paired_authenticity_loss = F.cross_entropy(
+                    authenticity_logits, label_indices)
+            auxiliary = {
+                'paired_authenticity_margin': authenticity_margin,
+                'paired_authenticity_direction_norm': direction_norm,
+            }
             return (
                 paired_authenticity_loss.unsqueeze(0),
                 class_logits.squeeze(1),
+                auxiliary,
             )
         elif return_cpd:
             if paired_input_ids is None or paired_attention_mask is None:
@@ -240,6 +261,8 @@ class Trainer(BaseModel):
         self.cpd_enabled = cpd_is_enabled(opt)
         self.paired_authenticity_enabled = (
             opt.paired_authenticity_prompt_classification)
+        self.paired_authenticity_normalize_direction = (
+            opt.paired_authenticity_normalize_direction)
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
@@ -362,6 +385,8 @@ class Trainer(BaseModel):
             labels=self.label,
             return_cpd=self.cpd_active,
             return_paired_authenticity=self.paired_authenticity_enabled,
+            normalize_paired_authenticity_direction=(
+                self.paired_authenticity_normalize_direction),
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}
@@ -394,6 +419,8 @@ class Trainer(BaseModel):
         self.loss_classification = (
             self.claloss * self.loss_fn(self.classhead, self.label))
         self.loss = self.loss_contrastive + self.loss_classification
+
+        self._update_paired_authenticity_diagnostics(zero)
 
         self.loss_hard_fake = zero
         if self.hard_fake_enabled:
@@ -478,3 +505,34 @@ class Trainer(BaseModel):
         self.loss.backward()
         self.optimizer.step()
         self.total_steps += 1
+
+    def _update_paired_authenticity_diagnostics(self, zero):
+        names = (
+            'papc_margin_real',
+            'papc_margin_fake',
+            'papc_margin_std_real',
+            'papc_margin_std_fake',
+            'papc_direction_norm',
+        )
+        if not self.paired_authenticity_enabled:
+            for name in names:
+                setattr(self, name, zero)
+            return
+
+        margins = self.auxiliary_components[
+            'paired_authenticity_margin'].detach().flatten()
+        direction_norms = self.auxiliary_components[
+            'paired_authenticity_direction_norm'].detach().flatten()
+        real_margins = margins[self.label < 0.5]
+        fake_margins = margins[self.label >= 0.5]
+
+        def mean_and_std(values):
+            if values.numel() == 0:
+                return zero, zero
+            return values.mean(), values.std(unbiased=False)
+
+        self.papc_margin_real, self.papc_margin_std_real = mean_and_std(
+            real_margins)
+        self.papc_margin_fake, self.papc_margin_std_fake = mean_and_std(
+            fake_margins)
+        self.papc_direction_norm = direction_norms.mean()

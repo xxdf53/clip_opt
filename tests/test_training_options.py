@@ -17,6 +17,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.hard_fake_loss_weight, 0.0)
         self.assertEqual(args.hard_fake_fraction, 0.25)
         self.assertFalse(args.paired_authenticity_prompt_classification)
+        self.assertFalse(args.paired_authenticity_normalize_direction)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -70,6 +71,17 @@ class TrainingOptionTests(unittest.TestCase):
         name = build_experiment_name(args, timestamp='20260817-120000')
 
         self.assertTrue(name.endswith('__papc'))
+
+    def test_compact_name_records_normalized_papc_direction(self):
+        args = self.parse([
+            '--name', 'normalized_paired_authenticity',
+            '--paired_authenticity_prompt_classification',
+            '--paired_authenticity_normalize_direction',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260818-120000')
+
+        self.assertTrue(name.endswith('__papc-nd'))
 
     def test_name_is_truncated_by_utf8_bytes(self):
         args = self.parse(['--name', 'long_experiment_name_' * 100])

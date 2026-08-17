@@ -75,12 +75,21 @@ class TrainingEntrypointTests(unittest.TestCase):
             real_logit_mean=value,
             fake_logit_mean=value,
             paired_authenticity_enabled=True,
+            papc_margin_real=value,
+            papc_margin_fake=value,
+            papc_margin_std_real=value,
+            papc_margin_std_fake=value,
+            papc_direction_norm=value,
         )
 
         text = format_training_losses(model)
 
         self.assertIn('paired_authenticity=1.250000', text)
         self.assertNotIn('contrastive=', text)
+        self.assertIn('papc_margin_real=1.250000', text)
+        self.assertIn('papc_margin_fake=1.250000', text)
+        self.assertIn('papc_margin_std_fake=1.250000', text)
+        self.assertIn('papc_direction_norm=1.250000', text)
 
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):

@@ -50,7 +50,12 @@ def build_experiment_name(opt, timestamp=None):
         configuration_parts.append(
             f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
     if getattr(opt, 'paired_authenticity_prompt_classification', False):
-        configuration_parts.append('papc')
+        papc_name = (
+            'papc-nd'
+            if getattr(opt, 'paired_authenticity_normalize_direction', False)
+            else 'papc'
+        )
+        configuration_parts.append(papc_name)
     configuration = '__'.join(configuration_parts)
     available_base_bytes = (
         MAX_EXPERIMENT_NAME_BYTES
@@ -191,6 +196,14 @@ class BaseOptions:
                 'per-image real/fake paired-prompt classification'
             ),
         )
+        parser.add_argument(
+            '--paired_authenticity_normalize_direction',
+            action='store_true',
+            help=(
+                'normalize the paired fake-minus-real text direction and '
+                'remove CLIP logit scaling from the PAPC objective'
+            ),
+        )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
 
         self.initialized = True
@@ -254,6 +267,13 @@ class BaseOptions:
             raise ValueError('--hard_fake_loss_weight cannot be negative')
         if not 0 < opt.hard_fake_fraction < 1:
             raise ValueError('--hard_fake_fraction must be in (0, 1)')
+        if (
+            opt.paired_authenticity_normalize_direction
+            and not opt.paired_authenticity_prompt_classification
+        ):
+            raise ValueError(
+                '--paired_authenticity_normalize_direction requires '
+                '--paired_authenticity_prompt_classification')
         if opt.paired_authenticity_prompt_classification and (
             opt.anchor_loss_weight > 0
             or opt.cpd_direction_weight > 0

@@ -96,6 +96,20 @@ python scripts/train.py [baseline arguments] \
 PAPC is training-only, adds no model parameters, and must be tested alone
 without HFR, SLAR, or CPD. Inference remains image-only.
 
+The optional normalized-direction PAPC variant removes per-caption prompt-gap
+scaling and the frozen CLIP logit scale from the auxiliary objective. Its
+authenticity score is the bounded cosine projection onto the unit-normalized
+fake-minus-real text direction:
+
+```bash
+python scripts/train.py [baseline arguments] \
+  --paired_authenticity_prompt_classification \
+  --paired_authenticity_normalize_direction
+```
+
+This variant adds no tunable loss weight or margin. Training logs report the
+real/fake PAPC margin distributions and raw prompt-direction norm.
+
 Experiment directories use a compact name capped at 180 UTF-8 bytes and record
 all active objectives. Failed GenImage paths (global contrastive, class-midpoint
 boundary centering, semantic residual orthogonality, SBD, GAlC, AGDRO,
