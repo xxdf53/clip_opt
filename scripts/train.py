@@ -58,6 +58,7 @@ RETIRED_TRAINING_FLAGS = {
     '--logit_center_loss_weight',
     '--margin_loss_weight',
     '--patch_residual_head',
+    '--paired_authenticity_normalize_direction',
     '--rank_loss_weight',
     '--residual_alpha',
     '--residual_scale',

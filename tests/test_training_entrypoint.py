@@ -95,6 +95,7 @@ class TrainingEntrypointTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([
                 '--patch_residual_head',
+                '--paired_authenticity_normalize_direction',
                 '--augmentation_dro_weight=1',
                 '--balanced_bias_calibration',
                 '--degradation_consistency_weight=1',

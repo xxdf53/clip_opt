@@ -2,10 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
-from transformers import CLIPModel
+from transformers import AutoTokenizer, CLIPModel
 
 from networks.base_model import BaseModel
-from utils.cpd import cpd_is_enabled, cpd_schedule_scale
+from utils.cpd import (
+    build_counterfactual_captions,
+    cpd_is_enabled,
+    cpd_schedule_scale,
+)
 from utils.training_objectives import (
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
@@ -74,6 +78,36 @@ class CLIPModel_lora(nn.Module):
         )
         return self.model.text_projection(text_outputs.pooler_output)
 
+    @torch.no_grad()
+    def initialize_classifier_from_authenticity_prompts(
+        self,
+        input_ids,
+        attention_mask,
+    ):
+        if input_ids.ndim != 2 or input_ids.shape[0] != 2:
+            raise ValueError(
+                'classifier initialization requires one real and one fake '
+                'prompt')
+        text_embeddings = F.normalize(
+            self.encode_text(input_ids, attention_mask), p=2, dim=-1)
+        real_embedding, fake_embedding = text_embeddings.unbind(dim=0)
+        authenticity_direction = fake_embedding - real_embedding
+        direction_norm = authenticity_direction.norm(p=2)
+        if direction_norm <= torch.finfo(authenticity_direction.dtype).eps:
+            raise ValueError('real and fake prompts produce no text direction')
+        authenticity_direction = authenticity_direction / direction_norm
+        classifier = self.model.fc
+        if classifier.out_features != 1:
+            raise ValueError(
+                'authenticity initialization requires one classifier output')
+        if authenticity_direction.numel() != classifier.in_features:
+            raise ValueError(
+                'text direction does not match classifier feature dimension')
+        classifier.weight.copy_(authenticity_direction.unsqueeze(0))
+        if classifier.bias is not None:
+            classifier.bias.zero_()
+        return direction_norm
+
     def _encode_image_outputs(self, images, disable_lora=False):
         def run_vision_tower():
             return self.vision_tower_lora(
@@ -135,7 +169,6 @@ class CLIPModel_lora(nn.Module):
         labels=None,
         return_cpd=False,
         return_paired_authenticity=False,
-        normalize_paired_authenticity_direction=False,
     ):
         vision_outputs = self._encode_image_outputs(images)
         adapted_features = self.model.visual_projection(
@@ -167,24 +200,14 @@ class CLIPModel_lora(nn.Module):
             real_embeddings, fake_embeddings = paired_embeddings.unbind(dim=1)
             authenticity_direction = fake_embeddings - real_embeddings
             direction_norm = authenticity_direction.norm(p=2, dim=-1)
-            if normalize_paired_authenticity_direction:
-                authenticity_direction = F.normalize(
-                    authenticity_direction, p=2, dim=-1)
-                authenticity_margin = (
-                    image_embeddings * authenticity_direction).sum(dim=-1)
-                paired_authenticity_loss = F.binary_cross_entropy_with_logits(
-                    authenticity_margin,
-                    labels.flatten().to(dtype=authenticity_margin.dtype),
-                )
-            else:
-                authenticity_logits = torch.einsum(
-                    'bd,bpd->bp', image_embeddings, paired_embeddings)
-                authenticity_logits = (
-                    authenticity_logits * self.model.logit_scale.exp())
-                authenticity_margin = (
-                    authenticity_logits[:, 1] - authenticity_logits[:, 0])
-                paired_authenticity_loss = F.cross_entropy(
-                    authenticity_logits, label_indices)
+            authenticity_logits = torch.einsum(
+                'bd,bpd->bp', image_embeddings, paired_embeddings)
+            authenticity_logits = (
+                authenticity_logits * self.model.logit_scale.exp())
+            authenticity_margin = (
+                authenticity_logits[:, 1] - authenticity_logits[:, 0])
+            paired_authenticity_loss = F.cross_entropy(
+                authenticity_logits, label_indices)
             auxiliary = {
                 'paired_authenticity_margin': authenticity_margin,
                 'paired_authenticity_direction_norm': direction_norm,
@@ -261,8 +284,8 @@ class Trainer(BaseModel):
         self.cpd_enabled = cpd_is_enabled(opt)
         self.paired_authenticity_enabled = (
             opt.paired_authenticity_prompt_classification)
-        self.paired_authenticity_normalize_direction = (
-            opt.paired_authenticity_normalize_direction)
+        self.paired_authenticity_head_initialization = (
+            opt.paired_authenticity_head_initialization)
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
@@ -276,6 +299,35 @@ class Trainer(BaseModel):
             lora_alpha=opt.lora_alpha,
             lora_dropout=opt.lora_dropout,
         )
+        if (
+            self.isTrain
+            and self.paired_authenticity_head_initialization
+            and not getattr(opt, 'continue_train', False)
+        ):
+            tokenizer = AutoTokenizer.from_pretrained(
+                opt.clip,
+                model_max_length=77,
+                padding_side='right',
+                use_fast=True,
+            )
+            tokenizer.pad_token_id = 0
+            prompts = build_counterfactual_captions('', opt.cates)
+            prompt_inputs = tokenizer(
+                prompts,
+                padding='max_length',
+                max_length=tokenizer.model_max_length,
+                truncation=True,
+                return_tensors='pt',
+            )
+            direction_norm = (
+                self.model.initialize_classifier_from_authenticity_prompts(
+                    prompt_inputs['input_ids'],
+                    prompt_inputs['attention_mask'],
+                )
+            )
+            print(
+                'Initialized classifier from authenticity prompts; '
+                f'direction_norm={direction_norm.item():.6f}')
 
         parameter_count = sum(
             parameter.numel() for parameter in self.model.parameters())
@@ -385,8 +437,6 @@ class Trainer(BaseModel):
             labels=self.label,
             return_cpd=self.cpd_active,
             return_paired_authenticity=self.paired_authenticity_enabled,
-            normalize_paired_authenticity_direction=(
-                self.paired_authenticity_normalize_direction),
         )
         self.output, self.classhead = outputs[:2]
         auxiliary = outputs[2] if len(outputs) == 3 else {}

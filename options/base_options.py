@@ -51,8 +51,8 @@ def build_experiment_name(opt, timestamp=None):
             f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
     if getattr(opt, 'paired_authenticity_prompt_classification', False):
         papc_name = (
-            'papc-nd'
-            if getattr(opt, 'paired_authenticity_normalize_direction', False)
+            'papc-hi'
+            if getattr(opt, 'paired_authenticity_head_initialization', False)
             else 'papc'
         )
         configuration_parts.append(papc_name)
@@ -197,11 +197,11 @@ class BaseOptions:
             ),
         )
         parser.add_argument(
-            '--paired_authenticity_normalize_direction',
+            '--paired_authenticity_head_initialization',
             action='store_true',
             help=(
-                'normalize the paired fake-minus-real text direction and '
-                'remove CLIP logit scaling from the PAPC objective'
+                'initialize the binary classifier from the frozen '
+                'fake-minus-real text direction before PAPC training'
             ),
         )
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
@@ -268,11 +268,11 @@ class BaseOptions:
         if not 0 < opt.hard_fake_fraction < 1:
             raise ValueError('--hard_fake_fraction must be in (0, 1)')
         if (
-            opt.paired_authenticity_normalize_direction
+            opt.paired_authenticity_head_initialization
             and not opt.paired_authenticity_prompt_classification
         ):
             raise ValueError(
-                '--paired_authenticity_normalize_direction requires '
+                '--paired_authenticity_head_initialization requires '
                 '--paired_authenticity_prompt_classification')
         if opt.paired_authenticity_prompt_classification and (
             opt.anchor_loss_weight > 0

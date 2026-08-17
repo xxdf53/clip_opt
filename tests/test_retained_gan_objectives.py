@@ -213,32 +213,25 @@ class RetainedGanObjectiveTests(unittest.TestCase):
         self.assertEqual(
             auxiliary['paired_authenticity_margin'].shape, (2,))
 
-    def test_normalized_papc_is_invariant_to_prompt_gap_length(self):
+    def test_authenticity_direction_initializes_binary_classifier(self):
         model = build_minimal_model()
-        images = torch.tensor([
-            [-1.25, 1.0],
-            [-1.25, 1.0],
-        ])
-        paired_ids = torch.tensor([
-            [[10, 0], [0, 10]],
-            [[8, 6], [6, 8]],
+        prompt_ids = torch.tensor([
+            [1, 0],
+            [-1, 0],
         ])
 
-        loss, _, auxiliary = model(
-            images,
-            paired_input_ids=paired_ids,
-            paired_attention_mask=torch.ones_like(paired_ids),
-            labels=torch.tensor([1.0, 1.0]),
-            return_paired_authenticity=True,
-            normalize_paired_authenticity_direction=True,
+        direction_norm = (
+            model.initialize_classifier_from_authenticity_prompts(
+                prompt_ids,
+                torch.ones_like(prompt_ids),
+            )
         )
 
-        margins = auxiliary['paired_authenticity_margin']
-        direction_norms = auxiliary['paired_authenticity_direction_norm']
-        self.assertTrue(torch.isfinite(loss).all())
-        self.assertTrue(torch.allclose(margins[0], margins[1]))
-        self.assertFalse(torch.allclose(direction_norms[0], direction_norms[1]))
-        self.assertLessEqual(margins.abs().max().item(), 1.0)
+        expected_direction = torch.tensor([-1.0, 0.0])
+        self.assertTrue(torch.allclose(
+            model.model.fc.weight[0], expected_direction))
+        self.assertEqual(model.model.fc.bias.item(), 0.0)
+        self.assertEqual(direction_norm.item(), 2.0)
 
     def test_cpd_and_slar_losses_favor_correct_separation(self):
         residual = torch.tensor([[-1.0, 0.0], [1.0, 0.0]])
