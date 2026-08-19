@@ -21,8 +21,6 @@ RETIRED_TRAINING_FLAGS = frozenset({
     '--gradient_accumulation_steps',
     '--gradient_conflict_diagnostics',
     '--gradient_conflict_projection',
-    '--hard_fake_fraction',
-    '--hard_fake_loss_weight',
     '--hard_fake_semantic_coverage',
     '--init_baseline_checkpoint',
     '--local_candidate_loss_weight',

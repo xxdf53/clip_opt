@@ -46,6 +46,9 @@ def build_experiment_name(opt, timestamp=None):
             f'm{opt.cpd_direction_margin}-s{opt.cpd_start_step}-'
             f'w{opt.cpd_warmup_steps}'
         )
+    if opt.hard_fake_loss_weight > 0:
+        configuration_parts.append(
+            f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
     if getattr(opt, 'pld_lora_initialization', False):
         configuration_parts.append('pld-lora')
     if getattr(opt, 'paired_authenticity_prompt_classification', False):
@@ -69,12 +72,15 @@ def validate_experiment_configuration(opt):
         'cpd_direction_margin',
         'cpd_start_step',
         'cpd_warmup_steps',
+        'hard_fake_loss_weight',
     )
     for name in nonnegative_options:
         if getattr(opt, name) < 0:
             raise ValueError(f'--{name} cannot be negative')
     if opt.logit_anchor <= 0:
         raise ValueError('--logit_anchor must be positive')
+    if not 0 < opt.hard_fake_fraction < 1:
+        raise ValueError('--hard_fake_fraction must be in (0, 1)')
     if opt.pld_lora_microbatch_size <= 0:
         raise ValueError('--pld_lora_microbatch_size must be positive')
 
@@ -89,6 +95,15 @@ def validate_experiment_configuration(opt):
         raise ValueError(
             '--paired_authenticity_prompt_classification must be tested '
             'alone without SLAR or CPD')
+
+    if opt.hard_fake_loss_weight > 0 and (
+        auxiliary_objective_enabled
+        or opt.paired_authenticity_prompt_classification
+        or opt.pld_lora_initialization
+    ):
+        raise ValueError(
+            '--hard_fake_loss_weight must be tested alone without '
+            'PLD-LoRA, PAPC, SLAR, or CPD')
 
     if not opt.pld_lora_initialization:
         return
@@ -210,6 +225,21 @@ class BaseOptions:
             type=int,
             default=0,
             help='steps used to linearly ramp CPD to its configured weight',
+        )
+        parser.add_argument(
+            '--hard_fake_loss_weight',
+            type=float,
+            default=0.0,
+            help=(
+                'extra BCE weight for the globally lowest-logit fake '
+                'samples; 0 disables hard-fake reweighting'
+            ),
+        )
+        parser.add_argument(
+            '--hard_fake_fraction',
+            type=float,
+            default=0.25,
+            help='fraction of fake samples selected from each global batch',
         )
         parser.add_argument(
             '--paired_authenticity_prompt_classification',

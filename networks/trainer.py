@@ -15,6 +15,7 @@ from utils.training_objectives import (
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
+    hard_fake_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -252,6 +253,9 @@ class Trainer(BaseModel):
         self.cpd_enabled = cpd_is_enabled(opt)
         self.paired_authenticity_enabled = (
             opt.paired_authenticity_prompt_classification)
+        self.hard_fake_loss_weight = opt.hard_fake_loss_weight
+        self.hard_fake_fraction = opt.hard_fake_fraction
+        self.hard_fake_enabled = self.hard_fake_loss_weight > 0
         self.pld_lora_initialization = opt.pld_lora_initialization
         self.pld_lora_initialized = False
         self.cpd_schedule_scale = 0.0
@@ -438,6 +442,24 @@ class Trainer(BaseModel):
         self.loss = self.loss_contrastive + self.loss_classification
 
         self._update_paired_authenticity_diagnostics(zero)
+
+        self.loss_hard_fake = zero
+        if self.hard_fake_enabled:
+            hard_fake_loss, hard_fake_diagnostics = (
+                hard_fake_reweighting_loss(
+                    self.classhead,
+                    self.label,
+                    fraction=self.hard_fake_fraction,
+                )
+            )
+            self.loss_hard_fake = (
+                self.claloss
+                * self.hard_fake_loss_weight
+                * hard_fake_loss
+            )
+            self.loss = self.loss + self.loss_hard_fake
+            for name, value in hard_fake_diagnostics.items():
+                setattr(self, name, value)
 
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:

@@ -67,6 +67,22 @@ Both are disabled by default and add no inference inputs. Their options are
 kept because failure on the diffusion protocol does not invalidate the matched
 GAN results.
 
+Hard-Fake Reweighting (HFR) is restored as the original training-only
+diffusion candidate from revision `28c26ee`. It selects the lowest-logit
+fraction of fake samples from the DataParallel-gathered global batch and adds
+their BCE once more. With a weight of one, selected fake samples receive twice
+the baseline classification weight while all other samples retain their
+baseline weight:
+
+```bash
+python scripts/train.py [baseline arguments] \
+  --hard_fake_loss_weight 1.0 --hard_fake_fraction 0.25
+```
+
+HFR adds no model parameters or inference inputs. It must be evaluated alone
+against a matched baseline; semantic-coverage and other later HFR variants
+remain retired.
+
 Paired Authenticity Prompt Classification (PAPC) replaces instance-level
 caption matching with a two-way decision between prompts that share the same
 caption but differ in their real/fake prefix and suffix. This removes content
@@ -106,7 +122,9 @@ consistency, HFR variants, balanced bias calibration,
 classification-protected gradient projection, and classification-referenced
 gradient capping, PAPC head initialization, and normalized-direction PAPC) were
 removed from the active implementation after failing their paired diffusion
-experiments. Historical checkpoints that did not change the model structure
+experiments. The original global HFR objective is retained as a separately
+pre-registered D20 candidate; its later variants remain removed. Historical
+checkpoints that did not change the model structure
 remain load-compatible; reproducing removed training paths requires the
 corresponding Git revision. Baseline, PAPC, SLAR, CPD, PLD-LoRA, and standard
 LoRA checkpoints share the same inference architecture.

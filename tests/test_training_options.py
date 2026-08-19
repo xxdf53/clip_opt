@@ -21,6 +21,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertFalse(args.paired_authenticity_prompt_classification)
         self.assertFalse(args.pld_lora_initialization)
         self.assertEqual(args.pld_lora_microbatch_size, 8)
+        self.assertEqual(args.hard_fake_loss_weight, 0.0)
+        self.assertEqual(args.hard_fake_fraction, 0.25)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -64,6 +66,17 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertTrue(name.endswith('__pld-lora'))
 
+    def test_compact_name_records_hard_fake_reweighting(self):
+        args = self.parse([
+            '--name', 'hfr',
+            '--hard_fake_loss_weight', '1.0',
+            '--hard_fake_fraction', '0.25',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260819-120000')
+
+        self.assertTrue(name.endswith('__hfr-w1.0-q0.25'))
+
     def test_pld_requires_manifest_and_standalone_training(self):
         missing_manifest = self.parse(['--pld_lora_initialization'])
         with self.assertRaisesRegex(ValueError, 'requires --train_manifest'):
@@ -72,6 +85,14 @@ class TrainingOptionTests(unittest.TestCase):
         stacked = self.parse([
             '--pld_lora_initialization',
             '--train_manifest', 'fixed.txt',
+            '--anchor_loss_weight', '0.5',
+        ])
+        with self.assertRaisesRegex(ValueError, 'must be tested alone'):
+            validate_experiment_configuration(stacked)
+
+    def test_hfr_requires_standalone_training(self):
+        stacked = self.parse([
+            '--hard_fake_loss_weight', '1.0',
             '--anchor_loss_weight', '0.5',
         ])
         with self.assertRaisesRegex(ValueError, 'must be tested alone'):
