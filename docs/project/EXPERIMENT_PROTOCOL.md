@@ -7,6 +7,30 @@
 - Select thresholds and calibration parameters only on a separate validation set, then keep them fixed for all test generators.
 - Run at least three seeds before promoting a method beyond a pilot.
 
+## Validation Threshold And Calibration
+
+For D20 candidate comparisons, validation calibration is mandatory when
+reporting fixed-threshold accuracy, ECE, or Brier score. The validation set
+must be independent of training, manifest construction, test evaluation, and
+method selection. Fit the threshold and temperature once from validation
+prediction CSVs with `scripts/calibrate_predictions.py fit`; apply the frozen
+JSON parameters to every test CSV with the `apply` subcommand. Never fit or
+change parameters using `diffusion_test_only` labels.
+
+The active offline rule is:
+
+```text
+calibrated_logit = (raw_logit - tau) / T
+calibrated_probability = sigmoid(calibrated_logit)
+prediction = calibrated_probability > 0.5
+```
+
+`tau` maximizes validation balanced accuracy. With `tau` fixed, positive `T`
+minimizes validation binary NLL. AP and AUROC should also be reported from
+the raw probabilities because the calibration transform is monotonic; ACC,
+Real ACC, Fake ACC, ECE, Brier, and NLL should be reported after applying the
+frozen parameters. The calibration JSON records the validation CSV SHA-256.
+
 ## Required Reporting
 
 For every completed experiment, record Macro AP, AUROC, Macro ACC, Real ACC, Fake ACC, ECE, Brier score, per-generator metrics, raw-logit class statistics, training cost, and inference latency where applicable.

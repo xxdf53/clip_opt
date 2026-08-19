@@ -31,8 +31,11 @@ No task may be archived as a project record until its handoff is stored in the c
 - 2026-08-18: G10 and D20 are the two primary research tracks. Method proposals belong to one of them and are not promoted to cross-family claims without direct evidence.
 - 2026-08-18: The T00 coordinating task is paused after the user requested confirmation at every reconstruction stage.
 - 2026-08-18: The user resumed T00 coordination. EXP-D20-001's ordinary seven-group diffusion baseline output was linked into the T20 ledger and handoff summary; wait for user confirmation before the next coordination phase.
-- 2026-08-19: EXP-D20-006 is pre-registered as a requested HFR command matched to the supplied two-GPU baseline. It remains planned; a shared fixed manifest is required before it can satisfy D20's strict-pair condition.
-- 2026-08-19: D20 restored only the original global HFR objective from `28c26ee`; semantic-coverage, compensation, and bias-neutral variants remain retired. No HFR training or result has been recorded.
+- 2026-08-19: EXP-D20-006 (HFR) and EXP-D20-007 (baseline) established the first matched fresh `ds271828` pair at seed 123. HFR improved Macro ACC by 5.87 pp and Macro AP by 0.28 pp, with a 5.36 pp Real ACC loss; seeds 42 and 2024 were subsequently completed in EXP-D20-008 through EXP-D20-011.
+- 2026-08-19: D20 restored only the original global HFR objective from `28c26ee`; semantic-coverage, compensation, and bias-neutral variants remain retired. The current pair is pilot evidence only, not a paper-level HFR claim.
+- 2026-08-19: EXP-D20-008 through EXP-D20-011 complete the same `ds271828` comparison for seeds 42 and 2024. Across three seeds HFR consistently improves Macro ACC/AP/AUROC/Brier, but lowers Real ACC and does not consistently improve ECE. Revision `19447ce92310f9b766d19b622e440151ef1f11ac` and manifest SHA-256 `0e31e71b5ac10ced50e830c1021fa186554be2f1e851d0c5183099ea43e36d5a` are recorded; preserve raw logs/CSVs before review.
+- 2026-08-19: Operational instruction recorded: avoid `wc -l` and any command form that may close or exit the server terminal. Future data checks must preserve the active shell session.
+- 2026-08-19: Validation calibration tooling is implemented and tested, but the D20 validation split and fitted `tau/T` artifacts are not yet recorded. Run calibration only on independent validation CSVs, then apply frozen JSON parameters to all test CSVs.
 
 ## Existing Thread Mapping
 
