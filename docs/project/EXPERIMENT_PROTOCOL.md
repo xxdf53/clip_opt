@@ -96,6 +96,60 @@ retired. The supplied baseline has no `--train_manifest`, so neither run is
 eligible for a strict paired claim until both commands use the same
 predeclared fixed manifest.
 
+### Budget-Matched Symmetric Hard-Example Ablation (D20)
+
+EXP-D20-014 tests whether HFR's fake-only asymmetry is necessary. It selects
+the lowest-logit 25% of fake samples and highest-logit 25% of real samples
+from each global batch. Each side receives weight 0.5, preserving the total
+selected-sample count and configured auxiliary-loss coefficient of HFR weight
+1.0 when classes are balanced. Actual loss magnitudes may differ by class, so
+training logs must report both auxiliary losses and selected-logit means.
+
+This is an ablation, not a replacement for HFR. All new options default to
+disabled, and inference remains image-only. The pre-registered seed-123 pilot
+at revision `f571bf5d90b0b5e679e0e11704f5338c79381db9` is:
+
+```bash
+env PYTHONUNBUFFERED=1 \
+TRANSFORMERS_OFFLINE=1 \
+HF_HUB_OFFLINE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+CUDA_VISIBLE_DEVICES=0,1 \
+python -u scripts/train.py \
+  --name symmetric_hard_manifest_ds271828_s123 \
+  --dataroot ./sdv1.4 \
+  --textroot ./caption_sd4 \
+  --clip ./clip-vit-large-patch14 \
+  --checkpoints_dir ./c2p_checkpoints \
+  --gpu_ids 0,1 \
+  --batch_size 64 \
+  --num_threads 8 \
+  --niter 1 \
+  --total_steps 200 \
+  --eval_freq 0 \
+  --loss_freq 10 \
+  --lr 0.0002 \
+  --loadSize 256 \
+  --cropSize 224 \
+  --seed 123 \
+  --data_seed 271828 \
+  --train_manifest ./training_manifests/d20_sdv14_train12800_ds271828.txt \
+  --claloss 4 \
+  --cates Deepfake Camera \
+  --lora_r 6 \
+  --lora_alpha 6 \
+  --lora_dropout 0.5 \
+  --hard_fake_loss_weight 0.5 \
+  --hard_fake_fraction 0.25 \
+  --hard_real_loss_weight 0.5 \
+  --hard_real_fraction 0.25
+```
+
+Compare raw and validation-fixed Macro ACC, Real/Fake ACC, AP/AUROC, ECE,
+and Brier against the seed-123 baseline and HFR. Expand to seeds 42 and 2024
+only if the pilot materially improves the Real/Fake tradeoff without erasing
+HFR's ranking gain.
+
 ### Image-Adaptive Prompt
 
 First test image-conditioned prompts with a fixed inference path. Treat test-time token tuning as a separate protocol because it requires per-image multi-view forward passes and backward updates. Reset any adapted state for every image.

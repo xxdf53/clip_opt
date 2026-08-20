@@ -71,3 +71,26 @@ After calibration, baseline versus HFR mean metrics were Macro ACC
 ECE 14.14% versus 14.80%, and Brier 0.1187 versus 0.1234. Thus HFR retains a
 ranking gain but does not establish an advantage for calibrated accuracy or
 calibration quality.
+
+## Symmetric Hard-Example Ablation
+
+Task ID: D20 / EXP-D20-014
+Objective: Test whether HFR's fake-only asymmetry is necessary by adding a
+coefficient- and selected-count-budget-matched hard-real branch.
+Status: implementation completed; seed-123 server run planned
+
+Code revision: `f571bf5d90b0b5e679e0e11704f5338c79381db9`.
+Implementation: `hard_real_reweighting_loss` selects the highest-logit real
+fraction from the global batch. New default-off options are
+`--hard_real_loss_weight` and `--hard_real_fraction`; training logs report the
+hard-real loss, selected count, total real count, and selected-logit mean.
+The existing HFR defaults and image-only inference path are unchanged.
+
+Protocol: seed 123, fixed `ds271828` manifest, hard-fake weight/fraction
+0.5/0.25, and hard-real weight/fraction 0.5/0.25. The full command is stored
+in `EXPERIMENT_PROTOCOL.md`. Expand to seeds 42 and 2024 only after the pilot
+is registered and shows a better Real/Fake tradeoff without erasing HFR's
+ranking gain.
+
+Verification: 89 unit tests passed in the `c2pclip` environment. No training,
+evaluation, checkpoint, or result has been produced locally.
