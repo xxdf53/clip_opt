@@ -116,6 +116,14 @@ def format_training_losses(model):
             f' hard_fake_logit_mean='
             f'{model.hard_fake_logit_mean.item():.6f}'
         )
+    if getattr(model, 'hard_real_enabled', False):
+        text += (
+            f' hard_real={model.loss_hard_real.item():.6f}'
+            f' hard_real_selected={model.hard_real_selected.item():.0f}'
+            f' hard_real_total={model.hard_real_total.item():.0f}'
+            f' hard_real_logit_mean='
+            f'{model.hard_real_logit_mean.item():.6f}'
+        )
     return text
 
 

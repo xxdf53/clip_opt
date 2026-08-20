@@ -84,41 +84,71 @@ def _flatten_binary_inputs(logits, labels):
     return logits, labels
 
 
-def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
-    """Add BCE for the lowest-logit fake samples in the global batch."""
+def _hard_class_reweighting_loss(
+    logits,
+    labels,
+    *,
+    fraction,
+    select_fake,
+):
+    class_name = 'fake' if select_fake else 'real'
     if not 0 < fraction < 1:
-        raise ValueError(f'hard-fake fraction must be in (0, 1), got {fraction}')
+        raise ValueError(
+            f'hard-{class_name} fraction must be in (0, 1), got {fraction}')
 
     logits, labels = _flatten_binary_inputs(logits, labels)
-    fake_indices = torch.nonzero(labels >= 0.5, as_tuple=False).flatten()
-    fake_count = fake_indices.numel()
-    selected_count = int(fraction * fake_count)
+    class_mask = labels >= 0.5 if select_fake else labels < 0.5
+    class_indices = torch.nonzero(class_mask, as_tuple=False).flatten()
+    class_count = class_indices.numel()
+    selected_count = int(fraction * class_count)
+    diagnostic_prefix = f'hard_{class_name}'
     zero = logits.sum() * 0.0
     diagnostics = {
-        'hard_fake_selected': logits.new_tensor(float(selected_count)),
-        'hard_fake_total': logits.new_tensor(float(fake_count)),
-        'hard_fake_logit_mean': logits.new_zeros(()),
+        f'{diagnostic_prefix}_selected': logits.new_tensor(
+            float(selected_count)),
+        f'{diagnostic_prefix}_total': logits.new_tensor(float(class_count)),
+        f'{diagnostic_prefix}_logit_mean': logits.new_zeros(()),
     }
     if selected_count == 0:
         return zero, diagnostics
 
-    fake_logits = logits[fake_indices]
-    selected_within_fake = torch.topk(
-        fake_logits.detach(),
+    class_logits = logits[class_indices]
+    selected_within_class = torch.topk(
+        class_logits.detach(),
         k=selected_count,
-        largest=False,
+        largest=not select_fake,
         sorted=False,
     ).indices
-    selected_indices = fake_indices[selected_within_fake]
+    selected_indices = class_indices[selected_within_class]
     per_sample = F.binary_cross_entropy_with_logits(
         logits,
         labels,
         reduction='none',
     )
     loss = per_sample[selected_indices].sum() / logits.numel()
-    diagnostics['hard_fake_logit_mean'] = (
+    diagnostics[f'{diagnostic_prefix}_logit_mean'] = (
         logits.detach()[selected_indices].mean())
     return loss, diagnostics
+
+
+def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
+    """Add BCE for the lowest-logit fake samples in the global batch."""
+    return _hard_class_reweighting_loss(
+        logits,
+        labels,
+        fraction=fraction,
+        select_fake=True,
+    )
+
+
+def hard_real_reweighting_loss(logits, labels, fraction=0.25):
+    """Add BCE for the highest-logit real samples in the global batch."""
+    return _hard_class_reweighting_loss(
+        logits,
+        labels,
+        fraction=fraction,
+        select_fake=False,
+    )
 
 
 def symmetric_logit_anchor_loss(logits, labels, anchor=3.0):

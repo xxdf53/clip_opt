@@ -16,6 +16,7 @@ from utils.training_objectives import (
     cpd_diagnostics,
     cpd_direction_loss,
     hard_fake_reweighting_loss,
+    hard_real_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
@@ -256,6 +257,9 @@ class Trainer(BaseModel):
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
+        self.hard_real_loss_weight = opt.hard_real_loss_weight
+        self.hard_real_fraction = opt.hard_real_fraction
+        self.hard_real_enabled = self.hard_real_loss_weight > 0
         self.pld_lora_initialization = opt.pld_lora_initialization
         self.pld_lora_initialized = False
         self.cpd_schedule_scale = 0.0
@@ -459,6 +463,24 @@ class Trainer(BaseModel):
             )
             self.loss = self.loss + self.loss_hard_fake
             for name, value in hard_fake_diagnostics.items():
+                setattr(self, name, value)
+
+        self.loss_hard_real = zero
+        if self.hard_real_enabled:
+            hard_real_loss, hard_real_diagnostics = (
+                hard_real_reweighting_loss(
+                    self.classhead,
+                    self.label,
+                    fraction=self.hard_real_fraction,
+                )
+            )
+            self.loss_hard_real = (
+                self.claloss
+                * self.hard_real_loss_weight
+                * hard_real_loss
+            )
+            self.loss = self.loss + self.loss_hard_real
+            for name, value in hard_real_diagnostics.items():
                 setattr(self, name, value)
 
         self.loss_anchor = zero

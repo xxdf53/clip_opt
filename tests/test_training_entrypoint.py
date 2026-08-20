@@ -91,6 +91,27 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('hard_fake_selected=1', text)
         self.assertIn('hard_fake_total=1', text)
 
+    def test_formats_hard_real_diagnostics(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            real_logit_mean=value,
+            fake_logit_mean=value,
+            hard_real_enabled=True,
+            loss_hard_real=value,
+            hard_real_selected=value,
+            hard_real_total=value,
+            hard_real_logit_mean=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('hard_real=1.250000', text)
+        self.assertIn('hard_real_selected=1', text)
+        self.assertIn('hard_real_total=1', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([

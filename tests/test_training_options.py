@@ -23,6 +23,8 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.pld_lora_microbatch_size, 8)
         self.assertEqual(args.hard_fake_loss_weight, 0.0)
         self.assertEqual(args.hard_fake_fraction, 0.25)
+        self.assertEqual(args.hard_real_loss_weight, 0.0)
+        self.assertEqual(args.hard_real_fraction, 0.25)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -77,6 +79,20 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertTrue(name.endswith('__hfr-w1.0-q0.25'))
 
+    def test_compact_name_records_symmetric_hard_reweighting(self):
+        args = self.parse([
+            '--name', 'symmetric_hard',
+            '--hard_fake_loss_weight', '0.5',
+            '--hard_fake_fraction', '0.25',
+            '--hard_real_loss_weight', '0.5',
+            '--hard_real_fraction', '0.25',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260820-120000')
+
+        self.assertTrue(
+            name.endswith('__hfr-w0.5-q0.25__hrr-w0.5-q0.25'))
+
     def test_pld_requires_manifest_and_standalone_training(self):
         missing_manifest = self.parse(['--pld_lora_initialization'])
         with self.assertRaisesRegex(ValueError, 'requires --train_manifest'):
@@ -97,6 +113,13 @@ class TrainingOptionTests(unittest.TestCase):
         ])
         with self.assertRaisesRegex(ValueError, 'must be tested alone'):
             validate_experiment_configuration(stacked)
+
+        hard_real_stacked = self.parse([
+            '--hard_real_loss_weight', '0.5',
+            '--cpd_direction_weight', '0.5',
+        ])
+        with self.assertRaisesRegex(ValueError, 'must be tested alone'):
+            validate_experiment_configuration(hard_real_stacked)
 
     def test_compact_name_records_paired_authenticity_classification(self):
         args = self.parse([
