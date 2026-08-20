@@ -35,7 +35,7 @@ No task may be archived as a project record until its handoff is stored in the c
 - 2026-08-19: D20 restored only the original global HFR objective from `28c26ee`; semantic-coverage, compensation, and bias-neutral variants remain retired. The current pair is pilot evidence only, not a paper-level HFR claim.
 - 2026-08-19: EXP-D20-008 through EXP-D20-011 complete the same `ds271828` comparison for seeds 42 and 2024. Across three seeds HFR consistently improves Macro ACC/AP/AUROC/Brier, but lowers Real ACC and does not consistently improve ECE. Revision `19447ce92310f9b766d19b622e440151ef1f11ac` and manifest SHA-256 `0e31e71b5ac10ced50e830c1021fa186554be2f1e851d0c5183099ea43e36d5a` are recorded; preserve raw logs/CSVs before review.
 - 2026-08-19: Operational instruction recorded: avoid `wc -l` and any command form that may close or exit the server terminal. Future data checks must preserve the active shell session.
-- 2026-08-19: Validation calibration tooling is implemented and tested, but the D20 validation split and fitted `tau/T` artifacts are not yet recorded. Run calibration only on independent validation CSVs, then apply frozen JSON parameters to all test CSVs.
+- 2026-08-19: D20 validation calibration is complete and audited in EXP-D20-012/013. A 4,000-image calibration manifest (SHA-256 `21fe72c...cdd23`) has zero resolved real-file overlap with the 12,800-image training manifest (SHA-256 `0e31e71b...e36d5a`), and all six same-name validation CSV/JSON pairs completed. Frozen per-seed parameters were applied to test data only. HFR retains AP/AUROC gains but fails to improve calibrated Macro ACC, ECE, or Brier consistently.
 
 ## Existing Thread Mapping
 

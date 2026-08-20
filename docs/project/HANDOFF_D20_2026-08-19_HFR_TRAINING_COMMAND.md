@@ -38,9 +38,9 @@ Risks or unresolved issues: Raw training and evaluation logs are not yet archive
 | 2024 | 87.22% | 94.92% | +7.70 pp | 99.33% | 99.47% | +0.14 pp | +0.11 pp | +0.93 pp | -0.0028 | -0.88 pp | +16.28 pp |
 | Mean | 88.32% | 95.54% | +7.23 pp | 99.02% | 99.26% | +0.24 pp | +0.18 pp | -1.06 pp | -0.0029 | -3.08 pp | +17.53 pp |
 
-Updated interpretation: HFR has a consistent three-seed effect on ranking and threshold metrics, with Macro ACC gains of 5.87-8.11 pp and AP gains of 0.14-0.30 pp. The dominant effect is recovering fake accuracy, while real accuracy falls in every seed. Brier improves consistently, but ECE is not stable because seed 2024 worsens by 0.93 pp. Revision and manifest provenance are now recorded; raw artifact preservation and validation-based threshold/calibration analysis remain before a paper claim.
+Updated interpretation: HFR has a consistent three-seed effect on raw ranking and threshold metrics, with Macro ACC gains of 5.87-8.11 pp and AP gains of 0.14-0.30 pp. The dominant effect is recovering fake accuracy, while real accuracy falls in every seed. The completed validation-fixed analysis retains the AP/AUROC gain but does not retain an ACC, ECE, or Brier advantage. Raw artifact preservation, ablations, and fresh cross-domain evaluation remain before a paper claim.
 
-Updated required next task: Preserve all six prediction CSVs and training/evaluation logs, then analyze per-generator paired deltas and validation-fixed threshold/calibration tradeoffs before promotion to T40.
+Updated required next task: Preserve all prediction CSVs and training/evaluation logs, then run HFR-specific ablations and fresh cross-domain evaluation before promotion to T40.
 
 ## Calibration Tooling
 
@@ -52,5 +52,22 @@ includes the validation CSV SHA-256. The `apply` command reads only a
 prediction CSV and the frozen JSON; it does not fit or modify parameters.
 
 Verification: `conda run -n c2pclip python -m unittest discover -s tests -p
-"test_*.py"` passed 85 tests. No validation calibration result has been run
-or recorded yet.
+"test_*.py"` passed 85 tests.
+
+## Validation Calibration Audit
+
+EXP-D20-012 and EXP-D20-013 completed validation-only calibration for model
+seeds 123, 42, and 2024. Training used the 12,800-entry manifest with SHA-256
+`0e31e71b5ac10ced50e830c1021fa186554be2f1e851d0c5183099ea43e36d5a`.
+Calibration used a separate 4,000-entry manifest with SHA-256
+`21fe72c98ce3c5deeb6a1e3405618943662a16f43c91c08f47dd9494ca9cdd23`.
+The split audit found zero missing targets and zero resolved real-file overlap.
+Each same-name validation prediction CSV fitted its own `tau/T` JSON, which
+was then frozen and applied to the corresponding test prediction CSV. This
+remains image-only inference and does not use test labels for fitting.
+
+After calibration, baseline versus HFR mean metrics were Macro ACC
+85.97% versus 85.60%, AP 99.02% versus 99.26%, AUROC 99.25% versus 99.42%,
+ECE 14.14% versus 14.80%, and Brier 0.1187 versus 0.1234. Thus HFR retains a
+ranking gain but does not establish an advantage for calibrated accuracy or
+calibration quality.
