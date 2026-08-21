@@ -100,7 +100,15 @@ EXP-D20-014 seed 123 subsequently completed. Raw Macro ACC/AP/AUROC were
 with Real/Fake ACC 99.40%/78.08%, ECE 11.33%, and Brier 0.0911. Its fitted
 parameters were `tau=0.0135154174641` and `T=0.0220055767472`.
 
-EXP-D20-015 is now the required next control: hard-fake weight/fraction
-0.5/0.25 with hard-real disabled, using the same seed and manifest. This
-separates the effect of halving HFR strength from adding hard-real. The full
-command is stored in `EXPERIMENT_PROTOCOL.md`; no result is recorded yet.
+EXP-D20-015 subsequently completed with hard-fake weight/fraction 0.5/0.25
+and hard-real disabled. Raw Macro ACC/AP/AUROC were 95.20%/99.08%/99.30%; the
+validation-fixed values were 88.64%/99.08%/99.30%, with Real/Fake ACC
+99.31%/77.98%, ECE 11.39%, and Brier 0.0918. Validation fitted
+`tau=0.0885073244572` and `T=0.0211702089886`.
+
+Against EXP-D20-014, EXP-D20-015 gains 4.89 pp raw Macro ACC but differs by
+only -0.10 pp after each model uses its independent validation-fixed threshold.
+AP/AUROC differ by -0.07/-0.04 pp and calibrated ECE/Brier by +0.06 pp/+0.0007.
+The hard-real branch therefore mainly changes the score offset at seed 123 and
+does not show an additional calibrated benefit. The simpler fake-only
+half-weight variant should be repeated at seeds 42 and 2024 before promotion.
