@@ -47,8 +47,15 @@ def build_experiment_name(opt, timestamp=None):
             f'w{opt.cpd_warmup_steps}'
         )
     if opt.hard_fake_loss_weight > 0:
+        fake_mode = getattr(opt, 'fake_reweighting_mode', 'hard')
+        fake_prefix = {
+            'hard': 'hfr',
+            'random': 'rfr',
+            'uniform': 'ufr',
+        }[fake_mode]
         configuration_parts.append(
-            f'hfr-w{opt.hard_fake_loss_weight}-q{opt.hard_fake_fraction}')
+            f'{fake_prefix}-w{opt.hard_fake_loss_weight}-'
+            f'q{opt.hard_fake_fraction}')
     if opt.hard_real_loss_weight > 0:
         configuration_parts.append(
             f'hrr-w{opt.hard_real_loss_weight}-q{opt.hard_real_fraction}')
@@ -85,6 +92,12 @@ def validate_experiment_configuration(opt):
         raise ValueError('--logit_anchor must be positive')
     if not 0 < opt.hard_fake_fraction < 1:
         raise ValueError('--hard_fake_fraction must be in (0, 1)')
+    if opt.fake_reweighting_mode != 'hard' and (
+        opt.hard_fake_loss_weight <= 0
+    ):
+        raise ValueError(
+            '--fake_reweighting_mode requires '
+            '--hard_fake_loss_weight greater than 0')
     if not 0 < opt.hard_real_fraction < 1:
         raise ValueError('--hard_real_fraction must be in (0, 1)')
     if opt.pld_lora_microbatch_size <= 0:
@@ -239,15 +252,28 @@ class BaseOptions:
             type=float,
             default=0.0,
             help=(
-                'extra BCE weight for the globally lowest-logit fake '
-                'samples; 0 disables hard-fake reweighting'
+                'extra BCE weight for fake samples selected or distributed '
+                'by --fake_reweighting_mode; 0 disables fake reweighting'
             ),
         )
         parser.add_argument(
             '--hard_fake_fraction',
             type=float,
             default=0.25,
-            help='fraction of fake samples selected from each global batch',
+            help=(
+                'selected fake fraction or effective uniform-weight budget '
+                'from each global batch'
+            ),
+        )
+        parser.add_argument(
+            '--fake_reweighting_mode',
+            choices=('hard', 'random', 'uniform'),
+            default='hard',
+            help=(
+                'fake auxiliary-loss selection: lowest-logit hard samples, '
+                'a random count-matched subset, or a count-budget-matched '
+                'uniform weight over all fake samples'
+            ),
         )
         parser.add_argument(
             '--hard_real_loss_weight',

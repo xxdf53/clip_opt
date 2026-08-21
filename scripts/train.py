@@ -109,9 +109,17 @@ def format_training_losses(model):
             f' cpd_prompt_gap={model.cpd_prompt_gap.item():.6f}'
         )
     if getattr(model, 'hard_fake_enabled', False):
+        effective = getattr(
+            model,
+            'hard_fake_effective',
+            model.hard_fake_selected,
+        )
         text += (
+            f' fake_reweight_mode='
+            f'{getattr(model, "fake_reweighting_mode", "hard")}'
             f' hard_fake={model.loss_hard_fake.item():.6f}'
             f' hard_fake_selected={model.hard_fake_selected.item():.0f}'
+            f' hard_fake_effective={effective.item():.0f}'
             f' hard_fake_total={model.hard_fake_total.item():.0f}'
             f' hard_fake_logit_mean='
             f'{model.hard_fake_logit_mean.item():.6f}'

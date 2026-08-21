@@ -23,6 +23,7 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.pld_lora_microbatch_size, 8)
         self.assertEqual(args.hard_fake_loss_weight, 0.0)
         self.assertEqual(args.hard_fake_fraction, 0.25)
+        self.assertEqual(args.fake_reweighting_mode, 'hard')
         self.assertEqual(args.hard_real_loss_weight, 0.0)
         self.assertEqual(args.hard_real_fraction, 0.25)
 
@@ -92,6 +93,32 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertTrue(
             name.endswith('__hfr-w0.5-q0.25__hrr-w0.5-q0.25'))
+
+    def test_compact_name_records_fake_reweighting_controls(self):
+        random_args = self.parse([
+            '--name', 'random_fake',
+            '--hard_fake_loss_weight', '1.0',
+            '--fake_reweighting_mode', 'random',
+        ])
+        uniform_args = self.parse([
+            '--name', 'uniform_fake',
+            '--hard_fake_loss_weight', '1.0',
+            '--fake_reweighting_mode', 'uniform',
+        ])
+
+        random_name = build_experiment_name(
+            random_args, timestamp='20260821-120000')
+        uniform_name = build_experiment_name(
+            uniform_args, timestamp='20260821-120000')
+
+        self.assertTrue(random_name.endswith('__rfr-w1.0-q0.25'))
+        self.assertTrue(uniform_name.endswith('__ufr-w1.0-q0.25'))
+
+    def test_non_hard_mode_requires_positive_fake_weight(self):
+        args = self.parse(['--fake_reweighting_mode', 'random'])
+
+        with self.assertRaisesRegex(ValueError, 'requires'):
+            validate_experiment_configuration(args)
 
     def test_pld_requires_manifest_and_standalone_training(self):
         missing_manifest = self.parse(['--pld_lora_initialization'])

@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from utils.training_objectives import (
+    fake_reweighting_loss,
     hard_fake_reweighting_loss,
     hard_real_reweighting_loss,
 )
@@ -74,6 +75,57 @@ class HardFakeReweightingTests(unittest.TestCase):
 
         self.assertAlmostEqual(
             diagnostics['hard_fake_logit_mean'].item(), -1.5)
+
+    def test_random_mode_is_count_matched_and_seed_reproducible(self):
+        logits = torch.tensor([-2.0, 0.4, -0.1, 1.0, -1.0, 0.2])
+        labels = torch.tensor([0.0, 1.0, 1.0, 0.0, 1.0, 1.0])
+        first_generator = torch.Generator().manual_seed(271828)
+        second_generator = torch.Generator().manual_seed(271828)
+
+        first_loss, first_diagnostics = fake_reweighting_loss(
+            logits,
+            labels,
+            fraction=0.5,
+            mode='random',
+            generator=first_generator,
+        )
+        second_loss, second_diagnostics = fake_reweighting_loss(
+            logits,
+            labels,
+            fraction=0.5,
+            mode='random',
+            generator=second_generator,
+        )
+
+        self.assertTrue(torch.equal(first_loss, second_loss))
+        self.assertEqual(first_diagnostics['hard_fake_selected'].item(), 2)
+        self.assertEqual(first_diagnostics['hard_fake_effective'].item(), 2)
+        self.assertTrue(torch.equal(
+            first_diagnostics['hard_fake_logit_mean'],
+            second_diagnostics['hard_fake_logit_mean'],
+        ))
+
+    def test_uniform_mode_matches_selected_sample_weight_budget(self):
+        logits = torch.tensor([-2.0, 0.4, -0.1, 1.0, -1.0, 0.2, 0.8])
+        labels = torch.tensor([0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0])
+        per_sample = F.binary_cross_entropy_with_logits(
+            logits, labels, reduction='none')
+
+        loss, diagnostics = fake_reweighting_loss(
+            logits, labels, fraction=0.25, mode='uniform')
+        expected = 0.2 * per_sample[[1, 2, 4, 5, 6]].sum() / logits.numel()
+
+        self.assertTrue(torch.allclose(loss, expected))
+        self.assertEqual(diagnostics['hard_fake_selected'].item(), 5)
+        self.assertEqual(diagnostics['hard_fake_effective'].item(), 1)
+
+    def test_fake_reweighting_rejects_unknown_mode(self):
+        with self.assertRaisesRegex(ValueError, 'mode must be one of'):
+            fake_reweighting_loss(
+                torch.zeros(4),
+                torch.ones(4),
+                mode='unknown',
+            )
 
     def test_hard_real_selects_highest_logit_real_samples(self):
         logits = torch.tensor([-2.0, 0.4, -0.1, 1.0, -1.0, 0.2])

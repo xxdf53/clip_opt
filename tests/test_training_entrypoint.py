@@ -79,16 +79,20 @@ class TrainingEntrypointTests(unittest.TestCase):
             real_logit_mean=value,
             fake_logit_mean=value,
             hard_fake_enabled=True,
+            fake_reweighting_mode='uniform',
             loss_hard_fake=value,
             hard_fake_selected=value,
+            hard_fake_effective=value,
             hard_fake_total=value,
             hard_fake_logit_mean=value,
         )
 
         text = format_training_losses(model)
 
+        self.assertIn('fake_reweight_mode=uniform', text)
         self.assertIn('hard_fake=1.250000', text)
         self.assertIn('hard_fake_selected=1', text)
+        self.assertIn('hard_fake_effective=1', text)
         self.assertIn('hard_fake_total=1', text)
 
     def test_formats_hard_real_diagnostics(self):

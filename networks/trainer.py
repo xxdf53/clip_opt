@@ -15,7 +15,7 @@ from utils.training_objectives import (
     cpd_content_rejection_loss,
     cpd_diagnostics,
     cpd_direction_loss,
-    hard_fake_reweighting_loss,
+    fake_reweighting_loss,
     hard_real_reweighting_loss,
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
@@ -256,6 +256,7 @@ class Trainer(BaseModel):
             opt.paired_authenticity_prompt_classification)
         self.hard_fake_loss_weight = opt.hard_fake_loss_weight
         self.hard_fake_fraction = opt.hard_fake_fraction
+        self.fake_reweighting_mode = opt.fake_reweighting_mode
         self.hard_fake_enabled = self.hard_fake_loss_weight > 0
         self.hard_real_loss_weight = opt.hard_real_loss_weight
         self.hard_real_fraction = opt.hard_real_fraction
@@ -450,10 +451,11 @@ class Trainer(BaseModel):
         self.loss_hard_fake = zero
         if self.hard_fake_enabled:
             hard_fake_loss, hard_fake_diagnostics = (
-                hard_fake_reweighting_loss(
+                fake_reweighting_loss(
                     self.classhead,
                     self.label,
                     fraction=self.hard_fake_fraction,
+                    mode=self.fake_reweighting_mode,
                 )
             )
             self.loss_hard_fake = (

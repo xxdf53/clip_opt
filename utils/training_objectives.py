@@ -4,6 +4,9 @@ import torch
 import torch.nn.functional as F
 
 
+FAKE_REWEIGHTING_MODES = ('hard', 'random', 'uniform')
+
+
 def _validate_feature_pair(first, second, names):
     if first.ndim != 2 or second.ndim != 2:
         raise ValueError(f'{names} must both have shape [batch, features]')
@@ -131,13 +134,82 @@ def _hard_class_reweighting_loss(
     return loss, diagnostics
 
 
+def fake_reweighting_loss(
+    logits,
+    labels,
+    fraction=0.25,
+    mode='hard',
+    generator=None,
+):
+    """Apply a count-budget-matched fake-only auxiliary BCE objective."""
+    if mode not in FAKE_REWEIGHTING_MODES:
+        raise ValueError(
+            f'fake reweighting mode must be one of '
+            f'{FAKE_REWEIGHTING_MODES}, got {mode!r}')
+    if not 0 < fraction < 1:
+        raise ValueError(
+            f'fake reweighting fraction must be in (0, 1), got {fraction}')
+
+    logits, labels = _flatten_binary_inputs(logits, labels)
+    fake_indices = torch.nonzero(labels >= 0.5, as_tuple=False).flatten()
+    fake_count = fake_indices.numel()
+    effective_count = int(fraction * fake_count)
+    zero = logits.sum() * 0.0
+    diagnostics = {
+        'hard_fake_selected': logits.new_zeros(()),
+        'hard_fake_effective': logits.new_tensor(float(effective_count)),
+        'hard_fake_total': logits.new_tensor(float(fake_count)),
+        'hard_fake_logit_mean': logits.new_zeros(()),
+    }
+    if effective_count == 0:
+        return zero, diagnostics
+
+    fake_logits = logits[fake_indices]
+    if mode == 'hard':
+        selected_within_fake = torch.topk(
+            fake_logits.detach(),
+            k=effective_count,
+            largest=False,
+            sorted=False,
+        ).indices
+        selected_indices = fake_indices[selected_within_fake]
+        selection_scale = 1.0
+    elif mode == 'random':
+        selected_within_fake = torch.randperm(
+            fake_count,
+            device=fake_indices.device,
+            generator=generator,
+        )[:effective_count]
+        selected_indices = fake_indices[selected_within_fake]
+        selection_scale = 1.0
+    else:
+        selected_indices = fake_indices
+        selection_scale = effective_count / fake_count
+
+    per_sample = F.binary_cross_entropy_with_logits(
+        logits,
+        labels,
+        reduction='none',
+    )
+    loss = (
+        selection_scale
+        * per_sample[selected_indices].sum()
+        / logits.numel()
+    )
+    diagnostics['hard_fake_selected'] = logits.new_tensor(
+        float(selected_indices.numel()))
+    diagnostics['hard_fake_logit_mean'] = (
+        logits.detach()[selected_indices].mean())
+    return loss, diagnostics
+
+
 def hard_fake_reweighting_loss(logits, labels, fraction=0.25):
     """Add BCE for the lowest-logit fake samples in the global batch."""
-    return _hard_class_reweighting_loss(
+    return fake_reweighting_loss(
         logits,
         labels,
         fraction=fraction,
-        select_fake=True,
+        mode='hard',
     )
 
 
