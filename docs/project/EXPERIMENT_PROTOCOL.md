@@ -191,9 +191,64 @@ python -u scripts/train.py \
   --hard_fake_fraction 0.25
 ```
 
-Use seed 123 only. Compare raw and validation-fixed metrics with the baseline,
-HFR weight 1.0, and EXP-D20-014 before deciding whether hard-real contributes
-beyond reducing fake-only weight.
+Seed 123 completed as EXP-D20-015. Compare raw and validation-fixed metrics
+with the baseline, HFR weight 1.0, and EXP-D20-014 before deciding whether
+hard-real contributes beyond reducing fake-only weight.
+
+### Fake-Only Half-Weight Multi-Seed Confirmation (D20)
+
+EXP-D20-016 and EXP-D20-017 repeat the exact EXP-D20-015 training protocol at
+model seeds 42 and 2024. Keep `data_seed=271828`, the fixed manifest, and every
+other training setting unchanged. Hard-real remains disabled.
+
+```bash
+for SEED in 42 2024; do
+  if [ "$SEED" = "42" ]; then
+    EXP_ID="EXP-D20-016"
+  else
+    EXP_ID="EXP-D20-017"
+  fi
+
+  env PYTHONUNBUFFERED=1 \
+  TRANSFORMERS_OFFLINE=1 \
+  HF_HUB_OFFLINE=1 \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  CUDA_VISIBLE_DEVICES=0,1 \
+  python -u scripts/train.py \
+    --name "hard_fake_w0.5_manifest_ds271828_s${SEED}" \
+    --dataroot ./sdv1.4 \
+    --textroot ./caption_sd4 \
+    --clip ./clip-vit-large-patch14 \
+    --checkpoints_dir ./c2p_checkpoints \
+    --gpu_ids 0,1 \
+    --batch_size 64 \
+    --num_threads 8 \
+    --niter 1 \
+    --total_steps 200 \
+    --eval_freq 0 \
+    --loss_freq 10 \
+    --lr 0.0002 \
+    --loadSize 256 \
+    --cropSize 224 \
+    --seed "$SEED" \
+    --data_seed 271828 \
+    --train_manifest ./training_manifests/d20_sdv14_train12800_ds271828.txt \
+    --claloss 4 \
+    --cates Deepfake Camera \
+    --lora_r 6 \
+    --lora_alpha 6 \
+    --lora_dropout 0.5 \
+    --hard_fake_loss_weight 0.5 \
+    --hard_fake_fraction 0.25 \
+    2>&1 | tee "./log_files/${EXP_ID}_training_s${SEED}.log"
+
+  TRAIN_STATUS=${PIPESTATUS[0]}
+  printf '%s training_exit_status=%s\n' "$EXP_ID" "$TRAIN_STATUS"
+done
+```
+
+Do not add hard-real flags. Evaluate both runs image-only under the same raw
+threshold and independent-validation calibration protocol used for EXP-D20-015.
 
 ### Image-Adaptive Prompt
 
