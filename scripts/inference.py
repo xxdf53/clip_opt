@@ -1,11 +1,10 @@
 import argparse
-import sys
 import time
 import os
 import torch
 import torch.nn as nn
 import numpy as np
-from sklearn.metrics import average_precision_score, precision_recall_curve, accuracy_score
+from sklearn.metrics import average_precision_score, accuracy_score
 from data import create_dataloader
 import random
 from transformers import CLIPModel

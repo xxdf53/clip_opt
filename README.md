@@ -134,7 +134,7 @@ LoRA checkpoints share the same inference architecture.
 ```bash
 conda activate c2pclip
 
-python inference.py \
+python -m scripts.inference \
   --dataroot ./datasets/GenImage/test/ \
   --model_path ./checkpoints/c2p_clip_genimage/last_model.pth
 ```
@@ -218,12 +218,12 @@ python scripts/plot_logit_dist.py \
 conda activate c2pclip
 
 # Decode features to text
-python decode_clipfeature_image.py \
+python networks/decode_clipfeature_image.py \
   --image_path ./assets/DALLE/DALLE_2_Cowboy_In_Swamp_Close_Up_Outpaint_1.png \
   --cal_detection_feat
 
 # Visualization (t-SNE)
-CUDA_VISIBLE_DEVICES=1 python draw_tsne_kmean.py \
+CUDA_VISIBLE_DEVICES=1 python scripts/draw_tsne_kmean.py \
   --draw_data_path ./tsne_png \
   --image_path ./stylegan_tsne_data  \
   --save_name stylegan_test \
