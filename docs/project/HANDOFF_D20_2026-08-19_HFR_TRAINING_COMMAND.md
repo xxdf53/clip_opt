@@ -94,3 +94,13 @@ ranking gain.
 
 Verification: 89 unit tests passed in the `c2pclip` environment. No training,
 evaluation, checkpoint, or result has been produced locally.
+
+EXP-D20-014 seed 123 subsequently completed. Raw Macro ACC/AP/AUROC were
+90.31%/99.15%/99.34%; validation-fixed values were 88.74%/99.15%/99.34%,
+with Real/Fake ACC 99.40%/78.08%, ECE 11.33%, and Brier 0.0911. Its fitted
+parameters were `tau=0.0135154174641` and `T=0.0220055767472`.
+
+EXP-D20-015 is now the required next control: hard-fake weight/fraction
+0.5/0.25 with hard-real disabled, using the same seed and manifest. This
+separates the effect of halving HFR strength from adding hard-real. The full
+command is stored in `EXPERIMENT_PROTOCOL.md`; no result is recorded yet.

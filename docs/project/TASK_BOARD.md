@@ -37,6 +37,7 @@ No task may be archived as a project record until its handoff is stored in the c
 - 2026-08-19: Operational instruction recorded: avoid `wc -l` and any command form that may close or exit the server terminal. Future data checks must preserve the active shell session.
 - 2026-08-19: D20 validation calibration is complete and audited in EXP-D20-012/013. A 4,000-image calibration manifest (SHA-256 `21fe72c...cdd23`) has zero resolved real-file overlap with the 12,800-image training manifest (SHA-256 `0e31e71b...e36d5a`), and all six same-name validation CSV/JSON pairs completed. Frozen per-seed parameters were applied to test data only. HFR retains AP/AUROC gains but fails to improve calibrated Macro ACC, ECE, or Brier consistently.
 - 2026-08-20: EXP-D20-014 is pre-registered as a seed-123, coefficient- and selected-count-budget-matched symmetric hard-example ablation at revision `f571bf5`. Run hard-fake/hard-real weights 0.5/0.5 and fractions 0.25/0.25 on the existing `ds271828` manifest; do not interpret or expand it before recording the pilot result.
+- 2026-08-21: EXP-D20-014 completed seed 123 and improved validation-fixed Macro ACC over baseline from 86.08% to 88.74%, with AP/AUROC 99.15%/99.34%. Because it both halves hard-fake weight and adds hard-real, run pre-registered EXP-D20-015 (hard-fake weight 0.5 only) before expanding the symmetric variant or changing the main HFR decision.
 
 ## Existing Thread Mapping
 

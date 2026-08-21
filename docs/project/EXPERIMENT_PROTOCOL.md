@@ -150,6 +150,51 @@ and Brier against the seed-123 baseline and HFR. Expand to seeds 42 and 2024
 only if the pilot materially improves the Real/Fake tradeoff without erasing
 HFR's ranking gain.
 
+### Fake-Only Half-Weight Control (D20)
+
+EXP-D20-015 isolates the two changes made by EXP-D20-014. It retains the
+lowest-logit 25% fake selection but uses hard-fake weight 0.5 and leaves
+hard-real disabled. Relative to HFR weight 1.0, only auxiliary strength
+changes; relative to EXP-D20-014, only the hard-real branch is removed.
+
+```bash
+env PYTHONUNBUFFERED=1 \
+TRANSFORMERS_OFFLINE=1 \
+HF_HUB_OFFLINE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+CUDA_VISIBLE_DEVICES=0,1 \
+python -u scripts/train.py \
+  --name hard_fake_w0.5_manifest_ds271828_s123 \
+  --dataroot ./sdv1.4 \
+  --textroot ./caption_sd4 \
+  --clip ./clip-vit-large-patch14 \
+  --checkpoints_dir ./c2p_checkpoints \
+  --gpu_ids 0,1 \
+  --batch_size 64 \
+  --num_threads 8 \
+  --niter 1 \
+  --total_steps 200 \
+  --eval_freq 0 \
+  --loss_freq 10 \
+  --lr 0.0002 \
+  --loadSize 256 \
+  --cropSize 224 \
+  --seed 123 \
+  --data_seed 271828 \
+  --train_manifest ./training_manifests/d20_sdv14_train12800_ds271828.txt \
+  --claloss 4 \
+  --cates Deepfake Camera \
+  --lora_r 6 \
+  --lora_alpha 6 \
+  --lora_dropout 0.5 \
+  --hard_fake_loss_weight 0.5 \
+  --hard_fake_fraction 0.25
+```
+
+Use seed 123 only. Compare raw and validation-fixed metrics with the baseline,
+HFR weight 1.0, and EXP-D20-014 before deciding whether hard-real contributes
+beyond reducing fake-only weight.
+
 ### Image-Adaptive Prompt
 
 First test image-conditioned prompts with a fixed inference path. Treat test-time token tuning as a separate protocol because it requires per-image multi-view forward passes and backward updates. Reset any adapted state for every image.
