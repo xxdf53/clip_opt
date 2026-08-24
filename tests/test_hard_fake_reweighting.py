@@ -63,6 +63,10 @@ class HardFakeReweightingTests(unittest.TestCase):
             self.assertEqual(loss.item(), 0.0)
             self.assertEqual(torch.count_nonzero(logits.grad).item(), 0)
             self.assertEqual(diagnostics['hard_fake_selected'].item(), 0)
+            self.assertTrue(torch.isfinite(
+                diagnostics['all_fake_bce_mean']))
+            self.assertTrue(torch.isfinite(
+                diagnostics['relative_fake_score']))
 
     def test_concatenated_shards_use_one_global_ranking(self):
         first_logits = torch.tensor([-0.2, 0.3])
@@ -316,6 +320,34 @@ class HardFakeReweightingTests(unittest.TestCase):
         self.assertFalse(real_diagnostics['hard_real_bce_mean'].requires_grad)
         self.assertGreater(fake_diagnostics['hard_fake_bce_mean'].item(), 0.0)
         self.assertGreater(real_diagnostics['hard_real_bce_mean'].item(), 0.0)
+        self.assertFalse(fake_diagnostics['all_fake_bce_mean'].requires_grad)
+        self.assertFalse(real_diagnostics['all_real_bce_mean'].requires_grad)
+        self.assertFalse(fake_diagnostics['relative_fake_score'].requires_grad)
+        self.assertFalse(real_diagnostics['relative_real_score'].requires_grad)
+        self.assertGreater(fake_diagnostics['relative_fake_score'].item(), 0.0)
+        self.assertGreater(real_diagnostics['relative_real_score'].item(), 0.0)
+
+    def test_relative_tail_scores_are_finite_for_missing_classes(self):
+        fake_loss, fake_diagnostics = hard_fake_reweighting_loss(
+            torch.zeros(4, requires_grad=True),
+            torch.zeros(4),
+            fraction=0.25,
+        )
+        real_loss, real_diagnostics = hard_real_reweighting_loss(
+            torch.zeros(4, requires_grad=True),
+            torch.ones(4),
+            fraction=0.25,
+        )
+
+        self.assertEqual(fake_loss.item(), 0.0)
+        self.assertEqual(real_loss.item(), 0.0)
+        for diagnostics, names in (
+            (fake_diagnostics, ('all_fake_bce_mean', 'relative_fake_score')),
+            (real_diagnostics, ('all_real_bce_mean', 'relative_real_score')),
+        ):
+            for name in names:
+                self.assertTrue(torch.isfinite(diagnostics[name]))
+                self.assertEqual(diagnostics[name].item(), 0.0)
 
 
 if __name__ == '__main__':

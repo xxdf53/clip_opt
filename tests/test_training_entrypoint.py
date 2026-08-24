@@ -134,6 +134,10 @@ class TrainingEntrypointTests(unittest.TestCase):
             adaptive_hard_real_share=value,
             adaptive_hard_fake_stat=value,
             adaptive_hard_real_stat=value,
+            all_fake_bce_mean=value,
+            all_real_bce_mean=value,
+            relative_fake_score=value,
+            relative_real_score=value,
             adaptive_hard_in_warmup=value,
             hard_fake_selected=value,
             hard_real_selected=value,
@@ -148,6 +152,10 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('adaptive_hard_share_fake=1.250000', text)
         self.assertIn('adaptive_hard_share_real=1.250000', text)
         self.assertIn('adaptive_hard_stat_fake=1.250000', text)
+        self.assertIn('all_fake_bce_mean=1.250000', text)
+        self.assertIn('all_real_bce_mean=1.250000', text)
+        self.assertIn('relative_fake_score=1.250000', text)
+        self.assertIn('relative_real_score=1.250000', text)
         self.assertIn('adaptive_hard_fake_selected=1', text)
 
     def test_rejects_retired_training_flags(self):

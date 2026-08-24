@@ -7,6 +7,21 @@ import torch.nn.functional as F
 FAKE_REWEIGHTING_MODES = ('hard', 'random', 'uniform')
 
 
+def _relative_tail_score(selected_bce_mean, all_bce_mean):
+    """Return a finite detached log-ratio for diagnostics only."""
+    epsilon = torch.finfo(all_bce_mean.dtype).eps
+    score = torch.log(
+        (selected_bce_mean.detach() + epsilon)
+        / (all_bce_mean.detach() + epsilon)
+    )
+    return torch.nan_to_num(
+        score,
+        nan=0.0,
+        posinf=1.0e6,
+        neginf=-1.0e6,
+    ).detach()
+
+
 class AdaptiveHardLossController:
     """Route one fixed hard-example budget using detached BCE statistics."""
 
@@ -215,7 +230,17 @@ def _hard_class_reweighting_loss(
         f'{diagnostic_prefix}_total': logits.new_tensor(float(class_count)),
         f'{diagnostic_prefix}_logit_mean': logits.new_zeros(()),
         f'{diagnostic_prefix}_bce_mean': logits.new_zeros(()),
+        f'all_{class_name}_bce_mean': logits.new_zeros(()),
+        f'relative_{class_name}_score': logits.new_zeros(()),
     }
+    per_sample = F.binary_cross_entropy_with_logits(
+        logits,
+        labels,
+        reduction='none',
+    )
+    if class_count > 0:
+        diagnostics[f'all_{class_name}_bce_mean'] = (
+            per_sample.detach()[class_indices].mean())
     if selected_count == 0:
         return zero, diagnostics
 
@@ -227,16 +252,15 @@ def _hard_class_reweighting_loss(
         sorted=False,
     ).indices
     selected_indices = class_indices[selected_within_class]
-    per_sample = F.binary_cross_entropy_with_logits(
-        logits,
-        labels,
-        reduction='none',
-    )
     loss = per_sample[selected_indices].sum() / logits.numel()
     diagnostics[f'{diagnostic_prefix}_logit_mean'] = (
         logits.detach()[selected_indices].mean())
-    diagnostics[f'{diagnostic_prefix}_bce_mean'] = (
-        per_sample.detach()[selected_indices].mean())
+    selected_bce_mean = per_sample.detach()[selected_indices].mean()
+    diagnostics[f'{diagnostic_prefix}_bce_mean'] = selected_bce_mean
+    diagnostics[f'relative_{class_name}_score'] = _relative_tail_score(
+        selected_bce_mean,
+        diagnostics[f'all_{class_name}_bce_mean'],
+    )
     return loss, diagnostics
 
 
@@ -267,7 +291,17 @@ def fake_reweighting_loss(
         'hard_fake_total': logits.new_tensor(float(fake_count)),
         'hard_fake_logit_mean': logits.new_zeros(()),
         'hard_fake_bce_mean': logits.new_zeros(()),
+        'all_fake_bce_mean': logits.new_zeros(()),
+        'relative_fake_score': logits.new_zeros(()),
     }
+    per_sample = F.binary_cross_entropy_with_logits(
+        logits,
+        labels,
+        reduction='none',
+    )
+    if fake_count > 0:
+        diagnostics['all_fake_bce_mean'] = (
+            per_sample.detach()[fake_indices].mean())
     if effective_count == 0:
         return zero, diagnostics
 
@@ -293,11 +327,6 @@ def fake_reweighting_loss(
         selected_indices = fake_indices
         selection_scale = effective_count / fake_count
 
-    per_sample = F.binary_cross_entropy_with_logits(
-        logits,
-        labels,
-        reduction='none',
-    )
     loss = (
         selection_scale
         * per_sample[selected_indices].sum()
@@ -307,8 +336,12 @@ def fake_reweighting_loss(
         float(selected_indices.numel()))
     diagnostics['hard_fake_logit_mean'] = (
         logits.detach()[selected_indices].mean())
-    diagnostics['hard_fake_bce_mean'] = (
-        per_sample.detach()[selected_indices].mean())
+    selected_bce_mean = per_sample.detach()[selected_indices].mean()
+    diagnostics['hard_fake_bce_mean'] = selected_bce_mean
+    diagnostics['relative_fake_score'] = _relative_tail_score(
+        selected_bce_mean,
+        diagnostics['all_fake_bce_mean'],
+    )
     return loss, diagnostics
 
 
