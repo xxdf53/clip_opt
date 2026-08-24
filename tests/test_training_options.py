@@ -26,6 +26,10 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.fake_reweighting_mode, 'hard')
         self.assertEqual(args.hard_real_loss_weight, 0.0)
         self.assertEqual(args.hard_real_fraction, 0.25)
+        self.assertEqual(args.adaptive_hard_loss_weight, 0.0)
+        self.assertEqual(args.adaptive_hard_temperature, 1.0)
+        self.assertEqual(args.adaptive_hard_ema_decay, 0.0)
+        self.assertEqual(args.adaptive_hard_warmup_steps, 0)
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -113,6 +117,50 @@ class TrainingOptionTests(unittest.TestCase):
 
         self.assertTrue(random_name.endswith('__rfr-w1.0-q0.25'))
         self.assertTrue(uniform_name.endswith('__ufr-w1.0-q0.25'))
+
+    def test_compact_name_records_adaptive_hard_controller(self):
+        args = self.parse([
+            '--name', 'adaptive_hard',
+            '--adaptive_hard_loss_weight', '1.0',
+            '--adaptive_hard_temperature', '0.5',
+            '--adaptive_hard_ema_decay', '0.9',
+            '--adaptive_hard_warmup_steps', '20',
+        ])
+
+        name = build_experiment_name(args, timestamp='20260824-120000')
+
+        self.assertTrue(
+            name.endswith('__abhr-w1.0-t0.5-e0.9-u20-qf0.25-qr0.25'))
+
+    def test_adaptive_hard_rejects_static_weights_and_invalid_config(self):
+        for static_flag in (
+            '--hard_fake_loss_weight',
+            '--hard_real_loss_weight',
+        ):
+            args = self.parse([
+                '--adaptive_hard_loss_weight', '1.0',
+                static_flag, '0.5',
+            ])
+            with self.assertRaisesRegex(ValueError, 'cannot be combined'):
+                validate_experiment_configuration(args)
+
+        invalid_temperature = self.parse([
+            '--adaptive_hard_temperature', '0',
+        ])
+        with self.assertRaisesRegex(ValueError, 'temperature must be positive'):
+            validate_experiment_configuration(invalid_temperature)
+
+        invalid_decay = self.parse([
+            '--adaptive_hard_ema_decay', '1',
+        ])
+        with self.assertRaisesRegex(ValueError, 'adaptive_hard_ema_decay'):
+            validate_experiment_configuration(invalid_decay)
+
+        invalid_warmup = self.parse([
+            '--adaptive_hard_warmup_steps', '-1',
+        ])
+        with self.assertRaisesRegex(ValueError, 'cannot be negative'):
+            validate_experiment_configuration(invalid_warmup)
 
     def test_non_hard_mode_requires_positive_fake_weight(self):
         args = self.parse(['--fake_reweighting_mode', 'random'])

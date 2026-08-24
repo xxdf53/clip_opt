@@ -116,6 +116,40 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('hard_real_selected=1', text)
         self.assertIn('hard_real_total=1', text)
 
+    def test_formats_adaptive_hard_diagnostics(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            real_logit_mean=value,
+            fake_logit_mean=value,
+            adaptive_hard_enabled=True,
+            loss_adaptive_hard=value,
+            adaptive_hard_loss_weight=1.0,
+            adaptive_hard_temperature=0.5,
+            adaptive_hard_ema_decay=0.9,
+            adaptive_hard_warmup_steps=20,
+            adaptive_hard_fake_share=value,
+            adaptive_hard_real_share=value,
+            adaptive_hard_fake_stat=value,
+            adaptive_hard_real_stat=value,
+            adaptive_hard_in_warmup=value,
+            hard_fake_selected=value,
+            hard_real_selected=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('adaptive_hard=1.250000', text)
+        self.assertIn('adaptive_hard_weight=1.000000', text)
+        self.assertIn('adaptive_hard_temperature=0.500000', text)
+        self.assertIn('adaptive_hard_ema_decay=0.900000', text)
+        self.assertIn('adaptive_hard_share_fake=1.250000', text)
+        self.assertIn('adaptive_hard_share_real=1.250000', text)
+        self.assertIn('adaptive_hard_stat_fake=1.250000', text)
+        self.assertIn('adaptive_hard_fake_selected=1', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([

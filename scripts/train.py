@@ -132,6 +132,31 @@ def format_training_losses(model):
             f' hard_real_logit_mean='
             f'{model.hard_real_logit_mean.item():.6f}'
         )
+    if getattr(model, 'adaptive_hard_enabled', False):
+        text += (
+            f' adaptive_hard={model.loss_adaptive_hard.item():.6f}'
+            f' adaptive_hard_weight={model.adaptive_hard_loss_weight:.6f}'
+            f' adaptive_hard_temperature='
+            f'{model.adaptive_hard_temperature:.6f}'
+            f' adaptive_hard_ema_decay='
+            f'{model.adaptive_hard_ema_decay:.6f}'
+            f' adaptive_hard_warmup_steps='
+            f'{model.adaptive_hard_warmup_steps}'
+            f' adaptive_hard_share_fake='
+            f'{model.adaptive_hard_fake_share.item():.6f}'
+            f' adaptive_hard_share_real='
+            f'{model.adaptive_hard_real_share.item():.6f}'
+            f' adaptive_hard_stat_fake='
+            f'{model.adaptive_hard_fake_stat.item():.6f}'
+            f' adaptive_hard_stat_real='
+            f'{model.adaptive_hard_real_stat.item():.6f}'
+            f' adaptive_hard_fake_selected='
+            f'{model.hard_fake_selected.item():.0f}'
+            f' adaptive_hard_real_selected='
+            f'{model.hard_real_selected.item():.0f}'
+            f' adaptive_hard_in_warmup='
+            f'{model.adaptive_hard_in_warmup.item():.0f}'
+        )
     return text
 
 
