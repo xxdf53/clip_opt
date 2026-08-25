@@ -59,13 +59,6 @@ def build_experiment_name(opt, timestamp=None):
     if opt.hard_real_loss_weight > 0:
         configuration_parts.append(
             f'hrr-w{opt.hard_real_loss_weight}-q{opt.hard_real_fraction}')
-    if opt.adaptive_hard_loss_weight > 0:
-        configuration_parts.append(
-            f'abhr-w{opt.adaptive_hard_loss_weight}-'
-            f't{opt.adaptive_hard_temperature}-'
-            f'e{opt.adaptive_hard_ema_decay}-'
-            f'u{opt.adaptive_hard_warmup_steps}-'
-            f'qf{opt.hard_fake_fraction}-qr{opt.hard_real_fraction}')
     if getattr(opt, 'pld_lora_initialization', False):
         configuration_parts.append('pld-lora')
     if getattr(opt, 'paired_authenticity_prompt_classification', False):
@@ -91,31 +84,14 @@ def validate_experiment_configuration(opt):
         'cpd_warmup_steps',
         'hard_fake_loss_weight',
         'hard_real_loss_weight',
-        'adaptive_hard_loss_weight',
-        'adaptive_hard_warmup_steps',
     )
     for name in nonnegative_options:
         if getattr(opt, name) < 0:
             raise ValueError(f'--{name} cannot be negative')
     if opt.logit_anchor <= 0:
         raise ValueError('--logit_anchor must be positive')
-    if opt.adaptive_hard_temperature <= 0:
-        raise ValueError('--adaptive_hard_temperature must be positive')
-    if not 0 <= opt.adaptive_hard_ema_decay < 1:
-        raise ValueError('--adaptive_hard_ema_decay must be in [0, 1)')
     if not 0 < opt.hard_fake_fraction < 1:
         raise ValueError('--hard_fake_fraction must be in (0, 1)')
-    adaptive_hard_enabled = opt.adaptive_hard_loss_weight > 0
-    if adaptive_hard_enabled and (
-        opt.hard_fake_loss_weight > 0 or opt.hard_real_loss_weight > 0
-    ):
-        raise ValueError(
-            '--adaptive_hard_loss_weight cannot be combined with static '
-            '--hard_fake_loss_weight or --hard_real_loss_weight')
-    if adaptive_hard_enabled and opt.fake_reweighting_mode != 'hard':
-        raise ValueError(
-            'adaptive hard reweighting requires '
-            '--fake_reweighting_mode hard')
     if opt.fake_reweighting_mode != 'hard' and (
         opt.hard_fake_loss_weight <= 0
     ):
@@ -140,10 +116,7 @@ def validate_experiment_configuration(opt):
             'alone without SLAR or CPD')
 
     hard_reweighting_enabled = (
-        opt.hard_fake_loss_weight > 0
-        or opt.hard_real_loss_weight > 0
-        or adaptive_hard_enabled
-    )
+        opt.hard_fake_loss_weight > 0 or opt.hard_real_loss_weight > 0)
     if hard_reweighting_enabled and (
         auxiliary_objective_enabled
         or opt.paired_authenticity_prompt_classification
@@ -316,33 +289,6 @@ class BaseOptions:
             type=float,
             default=0.25,
             help='fraction of real samples selected from each global batch',
-        )
-        parser.add_argument(
-            '--adaptive_hard_loss_weight',
-            type=float,
-            default=0.0,
-            help=(
-                'fixed total BCE weight adaptively shared between hard-fake '
-                'and hard-real objectives; 0 disables adaptive routing'
-            ),
-        )
-        parser.add_argument(
-            '--adaptive_hard_temperature',
-            type=float,
-            default=1.0,
-            help='positive softmax temperature for adaptive hard routing',
-        )
-        parser.add_argument(
-            '--adaptive_hard_ema_decay',
-            type=float,
-            default=0.0,
-            help='EMA decay in [0, 1) for detached hard-side BCE statistics',
-        )
-        parser.add_argument(
-            '--adaptive_hard_warmup_steps',
-            type=int,
-            default=0,
-            help='initial optimizer steps using equal hard-fake/real shares',
         )
         parser.add_argument(
             '--paired_authenticity_prompt_classification',

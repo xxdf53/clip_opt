@@ -7,124 +7,6 @@ import torch.nn.functional as F
 FAKE_REWEIGHTING_MODES = ('hard', 'random', 'uniform')
 
 
-def _relative_tail_score(selected_bce_mean, all_bce_mean):
-    """Return a finite detached log-ratio for diagnostics only."""
-    epsilon = torch.finfo(all_bce_mean.dtype).eps
-    score = torch.log(
-        (selected_bce_mean.detach() + epsilon)
-        / (all_bce_mean.detach() + epsilon)
-    )
-    return torch.nan_to_num(
-        score,
-        nan=0.0,
-        posinf=1.0e6,
-        neginf=-1.0e6,
-    ).detach()
-
-
-class AdaptiveHardLossController:
-    """Route one fixed hard-example budget using detached BCE statistics."""
-
-    def __init__(self, temperature=1.0, ema_decay=0.0, warmup_steps=0):
-        if temperature <= 0:
-            raise ValueError('adaptive hard temperature must be positive')
-        if not 0 <= ema_decay < 1:
-            raise ValueError('adaptive hard EMA decay must be in [0, 1)')
-        if warmup_steps < 0:
-            raise ValueError('adaptive hard warmup steps cannot be negative')
-        self.temperature = float(temperature)
-        self.ema_decay = float(ema_decay)
-        self.warmup_steps = int(warmup_steps)
-        self.fake_ema = None
-        self.real_ema = None
-
-    @staticmethod
-    def _detached_stat(value):
-        value = value.detach().reshape(())
-        value = torch.nan_to_num(
-            value,
-            nan=0.0,
-            posinf=1.0e6,
-            neginf=0.0,
-        )
-        return value.clamp_min(0.0)
-
-    def _update_ema(self, name, value):
-        previous = getattr(self, name)
-        if previous is None:
-            updated = value.clone()
-        else:
-            previous = previous.to(device=value.device, dtype=value.dtype)
-            updated = (
-                self.ema_decay * previous
-                + (1.0 - self.ema_decay) * value
-            )
-        updated = updated.detach()
-        setattr(self, name, updated)
-        return updated
-
-    def route(
-        self,
-        fake_bce_mean,
-        real_bce_mean,
-        *,
-        fake_selected,
-        real_selected,
-        step,
-    ):
-        """Return detached fake/real shares and routing diagnostics."""
-        fake_stat = self._detached_stat(fake_bce_mean)
-        real_stat = self._detached_stat(real_bce_mean).to(
-            device=fake_stat.device,
-            dtype=fake_stat.dtype,
-        )
-        fake_available = float(fake_selected.detach().item()) > 0
-        real_available = float(real_selected.detach().item()) > 0
-
-        fake_route_stat = fake_stat.new_zeros(())
-        real_route_stat = real_stat.new_zeros(())
-        if fake_available:
-            fake_route_stat = self._update_ema('fake_ema', fake_stat)
-        if real_available:
-            real_route_stat = self._update_ema('real_ema', real_stat)
-
-        in_warmup = (
-            fake_available
-            and real_available
-            and self.warmup_steps > 0
-            and step <= self.warmup_steps
-        )
-        if not fake_available and not real_available:
-            shares = fake_stat.new_tensor([0.5, 0.5])
-        elif fake_available and not real_available:
-            shares = fake_stat.new_tensor([1.0, 0.0])
-        elif real_available and not fake_available:
-            shares = fake_stat.new_tensor([0.0, 1.0])
-        elif in_warmup:
-            shares = fake_stat.new_tensor([0.5, 0.5])
-        else:
-            route_statistics = torch.stack(
-                (fake_route_stat, real_route_stat))
-            route_statistics = route_statistics - route_statistics.max()
-            effective_temperature = max(
-                self.temperature,
-                torch.finfo(route_statistics.dtype).tiny,
-            )
-            route_logits = route_statistics / effective_temperature
-            shares = torch.softmax(route_logits, dim=0)
-
-        shares = shares.detach()
-        diagnostics = {
-            'adaptive_hard_fake_share': shares[0],
-            'adaptive_hard_real_share': shares[1],
-            'adaptive_hard_fake_stat': fake_route_stat.detach(),
-            'adaptive_hard_real_stat': real_route_stat.detach(),
-            'adaptive_hard_in_warmup': fake_stat.new_tensor(
-                float(in_warmup)),
-        }
-        return shares[0], shares[1], diagnostics
-
-
 def _validate_feature_pair(first, second, names):
     if first.ndim != 2 or second.ndim != 2:
         raise ValueError(f'{names} must both have shape [batch, features]')
@@ -229,18 +111,7 @@ def _hard_class_reweighting_loss(
             float(selected_count)),
         f'{diagnostic_prefix}_total': logits.new_tensor(float(class_count)),
         f'{diagnostic_prefix}_logit_mean': logits.new_zeros(()),
-        f'{diagnostic_prefix}_bce_mean': logits.new_zeros(()),
-        f'all_{class_name}_bce_mean': logits.new_zeros(()),
-        f'relative_{class_name}_score': logits.new_zeros(()),
     }
-    per_sample = F.binary_cross_entropy_with_logits(
-        logits,
-        labels,
-        reduction='none',
-    )
-    if class_count > 0:
-        diagnostics[f'all_{class_name}_bce_mean'] = (
-            per_sample.detach()[class_indices].mean())
     if selected_count == 0:
         return zero, diagnostics
 
@@ -252,15 +123,14 @@ def _hard_class_reweighting_loss(
         sorted=False,
     ).indices
     selected_indices = class_indices[selected_within_class]
+    per_sample = F.binary_cross_entropy_with_logits(
+        logits,
+        labels,
+        reduction='none',
+    )
     loss = per_sample[selected_indices].sum() / logits.numel()
     diagnostics[f'{diagnostic_prefix}_logit_mean'] = (
         logits.detach()[selected_indices].mean())
-    selected_bce_mean = per_sample.detach()[selected_indices].mean()
-    diagnostics[f'{diagnostic_prefix}_bce_mean'] = selected_bce_mean
-    diagnostics[f'relative_{class_name}_score'] = _relative_tail_score(
-        selected_bce_mean,
-        diagnostics[f'all_{class_name}_bce_mean'],
-    )
     return loss, diagnostics
 
 
@@ -290,18 +160,7 @@ def fake_reweighting_loss(
         'hard_fake_effective': logits.new_tensor(float(effective_count)),
         'hard_fake_total': logits.new_tensor(float(fake_count)),
         'hard_fake_logit_mean': logits.new_zeros(()),
-        'hard_fake_bce_mean': logits.new_zeros(()),
-        'all_fake_bce_mean': logits.new_zeros(()),
-        'relative_fake_score': logits.new_zeros(()),
     }
-    per_sample = F.binary_cross_entropy_with_logits(
-        logits,
-        labels,
-        reduction='none',
-    )
-    if fake_count > 0:
-        diagnostics['all_fake_bce_mean'] = (
-            per_sample.detach()[fake_indices].mean())
     if effective_count == 0:
         return zero, diagnostics
 
@@ -327,6 +186,11 @@ def fake_reweighting_loss(
         selected_indices = fake_indices
         selection_scale = effective_count / fake_count
 
+    per_sample = F.binary_cross_entropy_with_logits(
+        logits,
+        labels,
+        reduction='none',
+    )
     loss = (
         selection_scale
         * per_sample[selected_indices].sum()
@@ -336,12 +200,6 @@ def fake_reweighting_loss(
         float(selected_indices.numel()))
     diagnostics['hard_fake_logit_mean'] = (
         logits.detach()[selected_indices].mean())
-    selected_bce_mean = per_sample.detach()[selected_indices].mean()
-    diagnostics['hard_fake_bce_mean'] = selected_bce_mean
-    diagnostics['relative_fake_score'] = _relative_tail_score(
-        selected_bce_mean,
-        diagnostics['all_fake_bce_mean'],
-    )
     return loss, diagnostics
 
 

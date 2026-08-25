@@ -11,7 +11,6 @@ from utils.cpd import (
 )
 from utils.pld_lora import initialize_patchwise_discriminant_lora
 from utils.training_objectives import (
-    AdaptiveHardLossController,
     counterfactual_prompt_components,
     cpd_content_rejection_loss,
     cpd_diagnostics,
@@ -262,20 +261,6 @@ class Trainer(BaseModel):
         self.hard_real_loss_weight = opt.hard_real_loss_weight
         self.hard_real_fraction = opt.hard_real_fraction
         self.hard_real_enabled = self.hard_real_loss_weight > 0
-        self.adaptive_hard_loss_weight = opt.adaptive_hard_loss_weight
-        self.adaptive_hard_temperature = opt.adaptive_hard_temperature
-        self.adaptive_hard_ema_decay = opt.adaptive_hard_ema_decay
-        self.adaptive_hard_warmup_steps = opt.adaptive_hard_warmup_steps
-        self.adaptive_hard_enabled = self.adaptive_hard_loss_weight > 0
-        self.adaptive_hard_controller = (
-            AdaptiveHardLossController(
-                temperature=self.adaptive_hard_temperature,
-                ema_decay=self.adaptive_hard_ema_decay,
-                warmup_steps=self.adaptive_hard_warmup_steps,
-            )
-            if self.adaptive_hard_enabled
-            else None
-        )
         self.pld_lora_initialization = opt.pld_lora_initialization
         self.pld_lora_initialized = False
         self.cpd_schedule_scale = 0.0
@@ -333,10 +318,6 @@ class Trainer(BaseModel):
 
         if not self.isTrain or opt.continue_train:
             self.load_networks(opt.epoch)
-        if self.adaptive_hard_enabled and opt.continue_train:
-            print(
-                'WARNING: adaptive hard EMA state is not stored by the '
-                'current model-only checkpoint format and restarts empty.')
 
         self.model = nn.DataParallel(
             self.model,
@@ -503,54 +484,6 @@ class Trainer(BaseModel):
             self.loss = self.loss + self.loss_hard_real
             for name, value in hard_real_diagnostics.items():
                 setattr(self, name, value)
-
-        self.loss_adaptive_hard = zero
-        if self.adaptive_hard_enabled:
-            hard_fake_budget, hard_fake_diagnostics = fake_reweighting_loss(
-                self.classhead,
-                self.label,
-                fraction=self.hard_fake_fraction,
-                mode='hard',
-            )
-            hard_real_budget, hard_real_diagnostics = (
-                hard_real_reweighting_loss(
-                    self.classhead,
-                    self.label,
-                    fraction=self.hard_real_fraction,
-                )
-            )
-            for diagnostics in (
-                hard_fake_diagnostics,
-                hard_real_diagnostics,
-            ):
-                for name, value in diagnostics.items():
-                    setattr(self, name, value)
-            fake_share, real_share, routing_diagnostics = (
-                self.adaptive_hard_controller.route(
-                    self.hard_fake_bce_mean,
-                    self.hard_real_bce_mean,
-                    fake_selected=self.hard_fake_selected,
-                    real_selected=self.hard_real_selected,
-                    step=self.total_steps + 1,
-                )
-            )
-            for name, value in routing_diagnostics.items():
-                setattr(self, name, value)
-            self.loss_hard_fake = (
-                self.claloss
-                * self.adaptive_hard_loss_weight
-                * fake_share
-                * hard_fake_budget
-            )
-            self.loss_hard_real = (
-                self.claloss
-                * self.adaptive_hard_loss_weight
-                * real_share
-                * hard_real_budget
-            )
-            self.loss_adaptive_hard = (
-                self.loss_hard_fake + self.loss_hard_real)
-            self.loss = self.loss + self.loss_adaptive_hard
 
         self.loss_anchor = zero
         if self.anchor_loss_weight > 0:
