@@ -24,6 +24,12 @@ from utils.evaluation_schedule import (
 )
 from utils.retired_training import reject_retired_training_flags
 from utils.util import Logger
+from utils.validation_routing import (
+    build_routing_dev_loader,
+    evaluate_routing_dev,
+    format_routing_update,
+    should_update_route,
+)
 from scripts.validate import validate
 
 
@@ -132,7 +138,30 @@ def format_training_losses(model):
             f' hard_real_logit_mean='
             f'{model.hard_real_logit_mean.item():.6f}'
         )
+    if getattr(model, 'routing_dev_enabled', False):
+        text += (
+            f' routing_aux={model.loss_routing_dev.item():.6f}'
+            f' routing_route_used={model.routing_route_used}'
+            f' routing_current_next='
+            f'{model.routing_dev_controller.current_route}'
+            f' routing_switch_count='
+            f'{model.routing_dev_controller.switch_count}'
+            f' routing_hard_fake_selected='
+            f'{model.routing_hard_fake_selected.item():.0f}'
+            f' routing_hard_real_selected='
+            f'{model.routing_hard_real_selected.item():.0f}'
+        )
     return text
+
+
+def run_validation_routing_update(model, routing_loader):
+    """Evaluate after one step and update only the next training interval."""
+    metrics = evaluate_routing_dev(
+        model.model,
+        routing_loader,
+        model.device,
+    )
+    return model.update_validation_route(metrics, step=model.total_steps)
 
 
 def main():
@@ -163,6 +192,23 @@ def main():
         print(f'training_manifest_samples={manifest_samples}')
         print(f'data_seed={opt.data_seed} model_seed={opt.seed}')
     model = Trainer(opt)
+    routing_loader = None
+    if opt.routing_dev_loss_weight > 0:
+        routing_loader = build_routing_dev_loader(
+            opt.routing_dev_root,
+            crop_size=opt.cropSize,
+            batch_size=opt.routing_dev_batch_size,
+            num_workers=opt.routing_dev_num_workers,
+            device=model.device,
+        )
+        print(
+            f'routing_development_root='
+            f'{Path(opt.routing_dev_root).expanduser().resolve()}')
+        print(f'routing_development_samples={len(routing_loader.dataset)}')
+        print(
+            'routing_development_contract=labeled model-selection data; '
+            'must be disjoint from optimization training, calibration, '
+            'and test data')
     first_epoch_batches = None
     if opt.pld_lora_initialization:
         print(
@@ -248,6 +294,17 @@ def main():
                     f'optimizer_step={model.total_steps} '
                     f'lr={model.lr}',
                 )
+
+            if routing_loader is not None and should_update_route(
+                model.total_steps,
+                opt.total_steps,
+                opt.routing_dev_interval,
+            ):
+                routing_diagnostics = run_validation_routing_update(
+                    model, routing_loader)
+                timestamp = time.strftime(
+                    '%Y_%m_%d_%H_%M_%S', time.localtime())
+                print(timestamp, format_routing_update(routing_diagnostics))
 
             if should_evaluate(model.total_steps, opt.eval_freq):
                 print(

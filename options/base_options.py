@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+from pathlib import Path
 
 import torch
 
@@ -59,6 +60,15 @@ def build_experiment_name(opt, timestamp=None):
     if opt.hard_real_loss_weight > 0:
         configuration_parts.append(
             f'hrr-w{opt.hard_real_loss_weight}-q{opt.hard_real_fraction}')
+    if getattr(opt, 'routing_dev_loss_weight', 0.0) > 0:
+        configuration_parts.append(
+            f'vgr-w{opt.routing_dev_loss_weight}-'
+            f'i{opt.routing_dev_interval}-'
+            f'e{opt.routing_dev_ema_decay}-'
+            f'd{opt.routing_dev_deadband}-'
+            f'p{opt.routing_dev_persistence}-'
+            f'r{opt.routing_dev_initial_route}'
+        )
     if getattr(opt, 'pld_lora_initialization', False):
         configuration_parts.append('pld-lora')
     if getattr(opt, 'paired_authenticity_prompt_classification', False):
@@ -84,6 +94,8 @@ def validate_experiment_configuration(opt):
         'cpd_warmup_steps',
         'hard_fake_loss_weight',
         'hard_real_loss_weight',
+        'routing_dev_loss_weight',
+        'routing_dev_deadband',
     )
     for name in nonnegative_options:
         if getattr(opt, name) < 0:
@@ -100,8 +112,44 @@ def validate_experiment_configuration(opt):
             '--hard_fake_loss_weight greater than 0')
     if not 0 < opt.hard_real_fraction < 1:
         raise ValueError('--hard_real_fraction must be in (0, 1)')
+    if opt.routing_dev_interval <= 0:
+        raise ValueError('--routing_dev_interval must be positive')
+    if opt.routing_dev_batch_size <= 0:
+        raise ValueError('--routing_dev_batch_size must be positive')
+    if opt.routing_dev_num_workers < 0:
+        raise ValueError('--routing_dev_num_workers cannot be negative')
+    if not 0 <= opt.routing_dev_ema_decay < 1:
+        raise ValueError('--routing_dev_ema_decay must be in [0, 1)')
+    if opt.routing_dev_persistence <= 0:
+        raise ValueError('--routing_dev_persistence must be positive')
     if opt.pld_lora_microbatch_size <= 0:
         raise ValueError('--pld_lora_microbatch_size must be positive')
+
+    routing_enabled = opt.routing_dev_loss_weight > 0
+    if routing_enabled:
+        if not opt.routing_dev_root:
+            raise ValueError(
+                '--routing_dev_loss_weight requires --routing_dev_root')
+        if opt.hard_fake_loss_weight > 0 or opt.hard_real_loss_weight > 0:
+            raise ValueError(
+                'validation-guided routing cannot be combined with static '
+                '--hard_fake_loss_weight or --hard_real_loss_weight')
+        if opt.fake_reweighting_mode != 'hard':
+            raise ValueError(
+                'validation-guided routing requires '
+                '--fake_reweighting_mode hard')
+        data_root = Path(opt.dataroot).expanduser().resolve()
+        train_root = (
+            data_root / getattr(opt, 'train_split', 'train')).resolve()
+        routing_root = Path(opt.routing_dev_root).expanduser().resolve()
+        if routing_root == data_root or (
+            routing_root == train_root
+            or train_root in routing_root.parents
+            or routing_root in train_root.parents
+        ):
+            raise ValueError(
+                'routing-development data must be separate from the '
+                'optimization training root')
 
     auxiliary_objective_enabled = (
         opt.anchor_loss_weight > 0
@@ -116,7 +164,10 @@ def validate_experiment_configuration(opt):
             'alone without SLAR or CPD')
 
     hard_reweighting_enabled = (
-        opt.hard_fake_loss_weight > 0 or opt.hard_real_loss_weight > 0)
+        opt.hard_fake_loss_weight > 0
+        or opt.hard_real_loss_weight > 0
+        or routing_enabled
+    )
     if hard_reweighting_enabled and (
         auxiliary_objective_enabled
         or opt.paired_authenticity_prompt_classification
@@ -289,6 +340,69 @@ class BaseOptions:
             type=float,
             default=0.25,
             help='fraction of real samples selected from each global batch',
+        )
+        parser.add_argument(
+            '--routing_dev_loss_weight',
+            type=float,
+            default=0.0,
+            help=(
+                'fixed training-only auxiliary budget routed to HFR or HRR '
+                'from labeled routing-development data; 0 disables routing'
+            ),
+        )
+        parser.add_argument(
+            '--routing_dev_root',
+            default='',
+            help=(
+                'separate labeled model-selection root containing direct '
+                '0_real/ and 1_fake/ folders; it must not overlap training, '
+                'calibration, or test data'
+            ),
+        )
+        parser.add_argument(
+            '--routing_dev_interval',
+            type=int,
+            default=100,
+            help='optimizer-step interval between routing-development passes',
+        )
+        parser.add_argument(
+            '--routing_dev_batch_size',
+            type=int,
+            default=64,
+            help='deterministic routing-development evaluation batch size',
+        )
+        parser.add_argument(
+            '--routing_dev_num_workers',
+            type=int,
+            default=4,
+            help='routing-development DataLoader worker count',
+        )
+        parser.add_argument(
+            '--routing_dev_ema_decay',
+            type=float,
+            default=0.9,
+            help='EMA decay for fake-minus-real routing-development BCE',
+        )
+        parser.add_argument(
+            '--routing_dev_deadband',
+            type=float,
+            default=0.0,
+            help='non-negative EMA score deadband that holds the current route',
+        )
+        parser.add_argument(
+            '--routing_dev_persistence',
+            type=int,
+            default=2,
+            help='consecutive opposite-route candidates required to switch',
+        )
+        parser.add_argument(
+            '--routing_dev_initial_route',
+            choices=('hfr', 'hrr'),
+            default='hfr',
+            help=(
+                'explicit deterministic route used before sufficient '
+                'routing-development evidence and for legacy fallback'
+            ),
         )
         parser.add_argument(
             '--paired_authenticity_prompt_classification',

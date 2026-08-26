@@ -116,6 +116,31 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn('hard_real_selected=1', text)
         self.assertIn('hard_real_total=1', text)
 
+    def test_formats_validation_guided_routing_loss(self):
+        value = SimpleNamespace(item=lambda: 1.25)
+        model = SimpleNamespace(
+            loss=value,
+            loss_contrastive=value,
+            loss_classification=value,
+            real_logit_mean=value,
+            fake_logit_mean=value,
+            routing_dev_enabled=True,
+            loss_routing_dev=value,
+            routing_route_used='hfr',
+            routing_dev_controller=SimpleNamespace(
+                current_route='hrr', switch_count=2),
+            routing_hard_fake_selected=value,
+            routing_hard_real_selected=value,
+        )
+
+        text = format_training_losses(model)
+
+        self.assertIn('routing_aux=1.250000', text)
+        self.assertIn('routing_route_used=hfr', text)
+        self.assertIn('routing_current_next=hrr', text)
+        self.assertIn('routing_switch_count=2', text)
+        self.assertIn('routing_hard_fake_selected=1', text)
+
     def test_rejects_retired_training_flags(self):
         with self.assertRaisesRegex(ValueError, 'retired training options'):
             reject_retired_training_flags([
