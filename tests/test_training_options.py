@@ -1,7 +1,5 @@
 import argparse
-import tempfile
 import unittest
-from pathlib import Path
 
 from options.base_options import (
     BaseOptions,
@@ -28,9 +26,6 @@ class TrainingOptionTests(unittest.TestCase):
         self.assertEqual(args.fake_reweighting_mode, 'hard')
         self.assertEqual(args.hard_real_loss_weight, 0.0)
         self.assertEqual(args.hard_real_fraction, 0.25)
-        self.assertEqual(args.routing_dev_loss_weight, 0.0)
-        self.assertEqual(args.routing_dev_root, '')
-        self.assertEqual(args.routing_dev_initial_route, 'hfr')
 
     def test_data_seed_and_manifest_default_to_disabled(self):
         args = self.parse([])
@@ -124,64 +119,6 @@ class TrainingOptionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'requires'):
             validate_experiment_configuration(args)
-
-    def test_compact_name_records_validation_guided_routing(self):
-        args = self.parse([
-            '--name', 'validation_guided',
-            '--routing_dev_loss_weight', '1.0',
-            '--routing_dev_root', 'routing_dev',
-            '--routing_dev_interval', '25',
-            '--routing_dev_ema_decay', '0.8',
-            '--routing_dev_deadband', '0.05',
-            '--routing_dev_persistence', '3',
-            '--routing_dev_initial_route', 'hrr',
-        ])
-        name = build_experiment_name(args, timestamp='20260826-120000')
-        self.assertTrue(
-            name.endswith('__vgr-w1.0-i25-e0.8-d0.05-p3-rhrr'))
-
-    def test_routing_rejects_static_weights_and_invalid_values(self):
-        stacked = self.parse([
-            '--routing_dev_loss_weight', '1.0',
-            '--routing_dev_root', 'routing_dev',
-            '--hard_fake_loss_weight', '1.0',
-        ])
-        with self.assertRaisesRegex(ValueError, 'cannot be combined'):
-            validate_experiment_configuration(stacked)
-
-        invalid = self.parse([
-            '--routing_dev_loss_weight', '1.0',
-            '--routing_dev_root', 'routing_dev',
-            '--routing_dev_persistence', '0',
-        ])
-        with self.assertRaisesRegex(ValueError, 'persistence'):
-            validate_experiment_configuration(invalid)
-
-    def test_routing_rejects_obvious_training_path_overlap(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            routing_inside_train = self.parse([
-                '--dataroot', str(root),
-                '--routing_dev_loss_weight', '1.0',
-                '--routing_dev_root', str(root / 'train' / 'routing'),
-            ])
-            with self.assertRaisesRegex(ValueError, 'must be separate'):
-                validate_experiment_configuration(routing_inside_train)
-
-            routing_contains_train = self.parse([
-                '--dataroot', str(root / 'dataset'),
-                '--routing_dev_loss_weight', '1.0',
-                '--routing_dev_root', str(root),
-            ])
-            with self.assertRaisesRegex(ValueError, 'must be separate'):
-                validate_experiment_configuration(routing_contains_train)
-
-            sibling = self.parse([
-                '--dataroot', str(root),
-                '--routing_dev_loss_weight', '1.0',
-                '--routing_dev_root', str(root / 'routing_dev'),
-            ])
-            validate_experiment_configuration(sibling)
 
     def test_pld_requires_manifest_and_standalone_training(self):
         missing_manifest = self.parse(['--pld_lora_initialization'])

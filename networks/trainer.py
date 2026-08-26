@@ -20,11 +20,6 @@ from utils.training_objectives import (
     symmetric_logit_anchor_diagnostics,
     symmetric_logit_anchor_loss,
 )
-from utils.validation_routing import (
-    ValidationGuidedHardRouter,
-    restore_router_state,
-    routed_hard_loss,
-)
 
 
 def local_contrastive_loss(logits):
@@ -266,23 +261,6 @@ class Trainer(BaseModel):
         self.hard_real_loss_weight = opt.hard_real_loss_weight
         self.hard_real_fraction = opt.hard_real_fraction
         self.hard_real_enabled = self.hard_real_loss_weight > 0
-        self.routing_dev_loss_weight = opt.routing_dev_loss_weight
-        self.routing_dev_enabled = self.routing_dev_loss_weight > 0
-        self.routing_dev_controller = (
-            ValidationGuidedHardRouter(
-                initial_route=opt.routing_dev_initial_route,
-                ema_decay=opt.routing_dev_ema_decay,
-                deadband=opt.routing_dev_deadband,
-                persistence=opt.routing_dev_persistence,
-            )
-            if self.routing_dev_enabled
-            else None
-        )
-        self.routing_route_used = (
-            opt.routing_dev_initial_route
-            if self.routing_dev_enabled
-            else 'disabled'
-        )
         self.pld_lora_initialization = opt.pld_lora_initialization
         self.pld_lora_initialized = False
         self.cpd_schedule_scale = 0.0
@@ -345,22 +323,6 @@ class Trainer(BaseModel):
             self.model,
             device_ids=opt.gpu_ids,
         ).cuda()
-
-    def get_training_state(self):
-        state = super().get_training_state()
-        if self.routing_dev_enabled:
-            state['validation_guided_router'] = (
-                self.routing_dev_controller.state_dict())
-        return state
-
-    def load_training_state(self, state):
-        if self.routing_dev_enabled:
-            restore_router_state(self.routing_dev_controller, state)
-
-    def update_validation_route(self, metrics, step):
-        if not self.routing_dev_enabled:
-            raise RuntimeError('validation-guided routing is disabled')
-        return self.routing_dev_controller.update(metrics, step)
 
     def initialize_pld_lora(self, batch):
         """Initialize LoRA from the first fixed global training batch."""
@@ -521,28 +483,6 @@ class Trainer(BaseModel):
             )
             self.loss = self.loss + self.loss_hard_real
             for name, value in hard_real_diagnostics.items():
-                setattr(self, name, value)
-
-        self.loss_routing_dev = zero
-        self.routing_hard_fake_selected = zero
-        self.routing_hard_real_selected = zero
-        if self.routing_dev_enabled:
-            self.routing_route_used = (
-                self.routing_dev_controller.current_route)
-            routed_loss, routing_diagnostics = routed_hard_loss(
-                self.classhead,
-                self.label,
-                route=self.routing_route_used,
-                fake_fraction=self.hard_fake_fraction,
-                real_fraction=self.hard_real_fraction,
-            )
-            self.loss_routing_dev = (
-                self.claloss
-                * self.routing_dev_loss_weight
-                * routed_loss
-            )
-            self.loss = self.loss + self.loss_routing_dev
-            for name, value in routing_diagnostics.items():
                 setattr(self, name, value)
 
         self.loss_anchor = zero

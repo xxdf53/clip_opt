@@ -16,14 +16,6 @@ class BaseModel(nn.Module):
         self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)
         self.device = torch.device('cuda:{}'.format(opt.gpu_ids[0])) if opt.gpu_ids else torch.device('cpu')
 
-    def get_training_state(self):
-        """Return optional training-only state stored outside model weights."""
-        return {}
-
-    def load_training_state(self, state):
-        """Restore optional training-only state from a checkpoint."""
-        del state
-
     def save_networks(self, epoch):
         save_filename = 'model_epoch_%s.pth' % epoch
         save_path = os.path.join(self.save_dir, save_filename)
@@ -33,7 +25,6 @@ class BaseModel(nn.Module):
             'model': self.model.state_dict(),
             # 'optimizer' : self.optimizer.state_dict(),
             'total_steps' : self.total_steps,
-            'training_state': self.get_training_state(),
         }
         torch.save(state_dict, save_path)
         try:
@@ -64,7 +55,6 @@ class BaseModel(nn.Module):
 
         self.model.load_state_dict(state_dict['model'])
         self.total_steps = state_dict['total_steps']
-        self.load_training_state(state_dict.get('training_state'))
 
         if self.isTrain and not self.opt.new_optim:
             self.optimizer.load_state_dict(state_dict['optimizer'])
