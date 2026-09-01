@@ -43,6 +43,12 @@ def parse_args(argv=None):
     parser.add_argument('--bins', type=int, default=70)
     parser.add_argument('--threshold', type=float, default=0.0)
     parser.add_argument(
+        '--plot_kind',
+        choices=('histogram', 'ecdf'),
+        default='histogram',
+        help='density histogram or empirical cumulative distribution',
+    )
+    parser.add_argument(
         '--density_scale',
         choices=('linear', 'log'),
         default='linear',
@@ -65,6 +71,8 @@ def parse_args(argv=None):
         parser.error('--threshold must be finite')
     if len(args.formats) != len(set(args.formats)):
         parser.error('--formats cannot contain duplicates')
+    if args.plot_kind == 'ecdf' and args.density_scale != 'linear':
+        parser.error('--density_scale applies only to histogram plots')
     return args
 
 
@@ -188,7 +196,33 @@ def configure_matplotlib():
     })
 
 
-def plot_panel(axis, distributions, bin_edges, title, threshold):
+def decorate_panel(axis, title, threshold):
+    axis.axvline(
+        threshold,
+        color='#777777',
+        linestyle=(0, (3, 2)),
+        linewidth=0.8,
+    )
+    axis.annotate(
+        'Default threshold',
+        xy=(threshold, 0.97),
+        xycoords=('data', 'axes fraction'),
+        xytext=(3, 0),
+        textcoords='offset points',
+        color='#666666',
+        fontsize=7.0,
+        rotation=90,
+        ha='left',
+        va='top',
+    )
+    axis.set_title(title, pad=5)
+    axis.set_xlabel('Fake logit')
+    axis.tick_params(width=0.7, length=3)
+    axis.grid(axis='y', color='#dddddd', linewidth=0.5, alpha=0.55)
+    axis.legend(frameon=False, loc='upper right')
+
+
+def plot_histogram_panel(axis, distributions, bin_edges, title, threshold):
     for class_name, color in (('real', REAL_COLOR), ('fake', FAKE_COLOR)):
         values = distributions[class_name]
         display_name = class_name.capitalize()
@@ -212,30 +246,26 @@ def plot_panel(axis, distributions, bin_edges, title, threshold):
             linewidth=0.8,
         )
 
-    axis.axvline(
-        threshold,
-        color='#777777',
-        linestyle=(0, (3, 2)),
-        linewidth=0.8,
-    )
-    axis.annotate(
-        'Default threshold',
-        xy=(threshold, 0.97),
-        xycoords=('data', 'axes fraction'),
-        xytext=(3, 0),
-        textcoords='offset points',
-        color='#666666',
-        fontsize=7.0,
-        rotation=90,
-        ha='left',
-        va='top',
-    )
-    axis.set_title(title, pad=5)
-    axis.set_xlabel('Fake logit')
     axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
-    axis.tick_params(width=0.7, length=3)
-    axis.grid(axis='y', color='#dddddd', linewidth=0.5, alpha=0.55)
-    axis.legend(frameon=False, loc='upper right')
+    decorate_panel(axis, title, threshold)
+
+
+def plot_ecdf_panel(axis, distributions, bin_edges, title, threshold):
+    for class_name, color in (('real', REAL_COLOR), ('fake', FAKE_COLOR)):
+        values = np.sort(distributions[class_name])
+        cumulative = np.arange(1, values.size + 1, dtype=np.float64) / values.size
+        display_name = class_name.capitalize()
+        axis.step(
+            values,
+            cumulative,
+            where='post',
+            color=color,
+            linewidth=1.15,
+            label=f'{display_name} (n={values.size:,})',
+        )
+    axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
+    axis.set_ylim(0.0, 1.01)
+    decorate_panel(axis, title, threshold)
 
 
 def build_figure(
@@ -245,6 +275,7 @@ def build_figure(
     threshold,
     protocol_label,
     density_scale,
+    plot_kind,
 ):
     configure_matplotlib()
     figure, axes = plt.subplots(
@@ -254,11 +285,18 @@ def build_figure(
         sharex=True,
         sharey=True,
     )
-    plot_panel(axes[0], baseline, bin_edges, 'C2P-CLIP', threshold)
-    plot_panel(axes[1], car, bin_edges, 'C2P-CLIP + CAR', threshold)
-    for axis in axes:
-        axis.set_yscale(density_scale)
-    y_label = 'Density' if density_scale == 'linear' else 'Density (log scale)'
+    panel_plotter = (
+        plot_histogram_panel if plot_kind == 'histogram' else plot_ecdf_panel)
+    panel_plotter(axes[0], baseline, bin_edges, 'C2P-CLIP', threshold)
+    panel_plotter(axes[1], car, bin_edges, 'C2P-CLIP + CAR', threshold)
+    if plot_kind == 'histogram':
+        for axis in axes:
+            axis.set_yscale(density_scale)
+        y_label = (
+            'Density' if density_scale == 'linear'
+            else 'Density (log scale)')
+    else:
+        y_label = 'Cumulative probability'
     axes[0].set_ylabel(y_label)
     for label, axis in zip(('a', 'b'), axes):
         axis.text(
@@ -337,6 +375,7 @@ def run(args):
         threshold=args.threshold,
         protocol_label=args.protocol_label,
         density_scale=args.density_scale,
+        plot_kind=args.plot_kind,
     )
     outputs = {}
     try:
@@ -370,7 +409,8 @@ def run(args):
         'histogram': {
             'bins': args.bins,
             'shared_bin_edges': bin_edges.tolist(),
-            'density': True,
+            'plot_kind': args.plot_kind,
+            'density': args.plot_kind == 'histogram',
             'density_scale': args.density_scale,
             'threshold': args.threshold,
         },
