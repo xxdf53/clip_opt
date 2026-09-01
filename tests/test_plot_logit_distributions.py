@@ -98,6 +98,7 @@ class PlotLogitDistributionsTests(unittest.TestCase):
                 '--protocol_label', 'Toy protocol',
                 '--output_prefix', str(output_prefix),
                 '--bins', '4',
+                '--density_scale', 'log',
             ])
 
             for suffix in ('.svg', '.pdf', '.png', '.summary.json'):
@@ -117,6 +118,7 @@ class PlotLogitDistributionsTests(unittest.TestCase):
             )
             self.assertEqual(
                 saved['histogram']['shared_bin_edges'], expected_edges)
+            self.assertEqual(saved['histogram']['density_scale'], 'log')
             self.assertEqual(saved['inputs']['baseline']['samples'], 4)
             self.assertEqual(saved['inputs']['baseline']['generators'], 2)
             self.assertEqual(summary['alignment']['same_set_and_order'], True)

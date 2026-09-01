@@ -43,6 +43,12 @@ def parse_args(argv=None):
     parser.add_argument('--bins', type=int, default=70)
     parser.add_argument('--threshold', type=float, default=0.0)
     parser.add_argument(
+        '--density_scale',
+        choices=('linear', 'log'),
+        default='linear',
+        help='linear density or log-density y-axis; log preserves tail detail',
+    )
+    parser.add_argument(
         '--formats',
         nargs='+',
         choices=SUPPORTED_FORMATS,
@@ -232,7 +238,14 @@ def plot_panel(axis, distributions, bin_edges, title, threshold):
     axis.legend(frameon=False, loc='upper right')
 
 
-def build_figure(baseline, car, bin_edges, threshold, protocol_label):
+def build_figure(
+    baseline,
+    car,
+    bin_edges,
+    threshold,
+    protocol_label,
+    density_scale,
+):
     configure_matplotlib()
     figure, axes = plt.subplots(
         1,
@@ -243,7 +256,10 @@ def build_figure(baseline, car, bin_edges, threshold, protocol_label):
     )
     plot_panel(axes[0], baseline, bin_edges, 'C2P-CLIP', threshold)
     plot_panel(axes[1], car, bin_edges, 'C2P-CLIP + CAR', threshold)
-    axes[0].set_ylabel('Density')
+    for axis in axes:
+        axis.set_yscale(density_scale)
+    y_label = 'Density' if density_scale == 'linear' else 'Density (log scale)'
+    axes[0].set_ylabel(y_label)
     for label, axis in zip(('a', 'b'), axes):
         axis.text(
             -0.12,
@@ -320,6 +336,7 @@ def run(args):
         bin_edges,
         threshold=args.threshold,
         protocol_label=args.protocol_label,
+        density_scale=args.density_scale,
     )
     outputs = {}
     try:
@@ -354,6 +371,7 @@ def run(args):
             'bins': args.bins,
             'shared_bin_edges': bin_edges.tolist(),
             'density': True,
+            'density_scale': args.density_scale,
             'threshold': args.threshold,
         },
         'statistics': {
