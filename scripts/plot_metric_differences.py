@@ -11,9 +11,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-POSITIVE_COLOR = '#4f8a78'
+BASELINE_COLOR = '#8d969d'
+CAR_COLOR = '#4f8a78'
 NEGATIVE_COLOR = '#b96868'
-ZERO_COLOR = '#777777'
+CONNECTOR_COLOR = '#c5c9c8'
 
 
 def parse_args(argv=None):
@@ -61,12 +62,6 @@ def configure_matplotlib():
     })
 
 
-def difference_limits(differences):
-    largest = max(float(np.max(np.abs(differences))), 0.5)
-    padding = max(largest * 0.24, 0.35)
-    return -largest - padding, largest + padding
-
-
 def build_figure(
     metrics,
     baseline,
@@ -78,59 +73,113 @@ def build_figure(
     configure_matplotlib()
     differences = car - baseline
     positions = np.arange(len(metrics), dtype=np.float64)
-    colors = [
-        POSITIVE_COLOR if difference >= 0.0 else NEGATIVE_COLOR
-        for difference in differences
-    ]
 
-    height = max(2.4, 0.52 * len(metrics) + 1.15)
+    height = max(3.0, 0.82 * len(metrics) + 1.35)
     figure, axis = plt.subplots(figsize=(7.1, height))
-    axis.barh(
+    left = np.minimum(baseline, car)
+    right = np.maximum(baseline, car)
+    axis.hlines(
         positions,
-        differences,
-        height=0.56,
-        color=colors,
-        edgecolor='white',
-        linewidth=0.6,
+        left,
+        right,
+        color=CONNECTOR_COLOR,
+        linewidth=2.4,
+        zorder=1,
     )
-    axis.axvline(0.0, color=ZERO_COLOR, linewidth=0.8)
+    axis.scatter(
+        baseline,
+        positions,
+        s=54,
+        color=BASELINE_COLOR,
+        edgecolor='white',
+        linewidth=0.7,
+        label=baseline_label,
+        zorder=3,
+    )
+    axis.scatter(
+        car,
+        positions,
+        s=54,
+        color=CAR_COLOR,
+        edgecolor='white',
+        linewidth=0.7,
+        label=car_label,
+        zorder=4,
+    )
     axis.set_yticks(positions, labels=metrics)
     axis.invert_yaxis()
-    axis.set_xlabel(f'{car_label} - {baseline_label} (percentage points)')
-    axis.set_title(protocol_label, pad=9)
+    axis.set_xlabel('Score (%)')
+    figure.suptitle(protocol_label, fontsize=9.0, y=0.965)
     axis.grid(axis='x', color='#dddddd', linewidth=0.5, alpha=0.65)
     axis.set_axisbelow(True)
     axis.tick_params(axis='y', length=0)
+    axis.legend(
+        frameon=False,
+        loc='lower center',
+        bbox_to_anchor=(0.5, 1.075),
+        ncol=2,
+        handletextpad=0.5,
+        columnspacing=1.6,
+    )
 
-    x_min, x_max = difference_limits(differences)
+    score_min = float(min(np.min(baseline), np.min(car)))
+    score_max = float(max(np.max(baseline), np.max(car)))
+    score_range = max(score_max - score_min, 1.0)
+    padding = max(score_range * 0.12, 0.8)
+    x_min = score_min - padding
+    x_max = score_max + padding
     axis.set_xlim(x_min, x_max)
-    text_offset = (x_max - x_min) * 0.018
     for index, (base_value, car_value, difference) in enumerate(zip(
         baseline,
         car,
         differences,
     )):
         sign = '+' if difference >= 0.0 else ''
-        text = (
-            f'{sign}{difference:.2f} pp  '
-            f'({base_value:.2f} -> {car_value:.2f})')
-        if difference >= 0.0:
-            x_position = difference + text_offset
-            horizontal_alignment = 'left'
-        else:
-            x_position = difference - text_offset
-            horizontal_alignment = 'right'
         axis.text(
-            x_position,
+            base_value,
+            index + 0.19,
+            f'{base_value:.2f}',
+            ha='center',
+            va='top',
+            fontsize=6.8,
+            color='#60686e',
+        )
+        axis.text(
+            car_value,
+            index - 0.19,
+            f'{car_value:.2f}',
+            ha='center',
+            va='bottom',
+            fontsize=6.8,
+            color='#356b5c',
+        )
+        delta_color = CAR_COLOR if difference >= 0.0 else NEGATIVE_COLOR
+        axis.text(
+            1.025,
             index,
-            text,
-            ha=horizontal_alignment,
+            f'{sign}{difference:.2f} pp',
+            transform=axis.get_yaxis_transform(),
+            ha='left',
             va='center',
-            fontsize=7.0,
-            color='#333333',
+            fontsize=7.2,
+            fontweight='bold',
+            color=delta_color,
+            clip_on=False,
         )
 
-    figure.subplots_adjust(left=0.18, right=0.96, bottom=0.20, top=0.86)
+    axis.text(
+        1.025,
+        1.075,
+        'Difference',
+        transform=axis.transAxes,
+        ha='left',
+        va='bottom',
+        fontsize=7.0,
+        color='#555555',
+        clip_on=False,
+    )
+    axis.set_ylim(len(metrics) - 0.45, -0.55)
+    figure.subplots_adjust(left=0.18, right=0.84, bottom=0.18, top=0.73)
     return figure, differences
 
 
