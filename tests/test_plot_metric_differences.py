@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +6,7 @@ from scripts.plot_metric_differences import main
 
 
 class PlotMetricDifferencesTests(unittest.TestCase):
-    def test_writes_outputs_and_exact_differences(self):
+    def test_writes_one_pdf_and_returns_exact_differences(self):
         with tempfile.TemporaryDirectory() as directory:
             output_prefix = Path(directory) / 'metric.gap'
             summary = main([
@@ -18,16 +17,13 @@ class PlotMetricDifferencesTests(unittest.TestCase):
                 '--output_prefix', str(output_prefix),
             ])
 
-            for suffix in ('.svg', '.pdf', '.png', '.summary.json'):
-                self.assertTrue(Path(f'{output_prefix}{suffix}').is_file())
-            with Path(f'{output_prefix}.summary.json').open(
-                encoding='utf-8'
-            ) as input_file:
-                saved = json.load(input_file)
+            self.assertTrue(Path(f'{output_prefix}.pdf').is_file())
+            for suffix in ('.svg', '.png', '.summary.json'):
+                self.assertFalse(Path(f'{output_prefix}{suffix}').exists())
             self.assertAlmostEqual(
-                saved['metrics'][0]['difference_pp'], 1.67)
+                summary['metrics'][0]['difference_pp'], 1.67)
             self.assertAlmostEqual(
-                saved['metrics'][1]['difference_pp'], 0.25)
+                summary['metrics'][1]['difference_pp'], 0.25)
             self.assertEqual(summary['metrics'][2]['name'], 'AUROC')
 
     def test_rejects_mismatched_lengths(self):

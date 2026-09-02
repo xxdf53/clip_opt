@@ -1,12 +1,7 @@
 """Plot CAR-minus-baseline metric differences from registered results."""
 
 import argparse
-import json
 import math
-import platform
-import sys
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib
@@ -19,7 +14,6 @@ import numpy as np
 POSITIVE_COLOR = '#4f8a78'
 NEGATIVE_COLOR = '#b96868'
 ZERO_COLOR = '#777777'
-SUPPORTED_FORMATS = ('svg', 'pdf', 'png')
 
 
 def parse_args(argv=None):
@@ -32,13 +26,6 @@ def parse_args(argv=None):
     parser.add_argument('--output_prefix', required=True)
     parser.add_argument('--baseline_label', default='C2P-CLIP')
     parser.add_argument('--car_label', default='C2P-CLIP + CAR')
-    parser.add_argument(
-        '--formats',
-        nargs='+',
-        choices=SUPPORTED_FORMATS,
-        default=list(SUPPORTED_FORMATS),
-    )
-    parser.add_argument('--dpi', type=int, default=300)
     args = parser.parse_args(argv)
 
     lengths = {len(args.metrics), len(args.baseline), len(args.car)}
@@ -50,10 +37,6 @@ def parse_args(argv=None):
         parser.error('--metrics cannot contain duplicates')
     if any(not math.isfinite(value) for value in args.baseline + args.car):
         parser.error('--baseline and --car values must be finite')
-    if args.dpi <= 0:
-        parser.error('--dpi must be a positive integer')
-    if len(args.formats) != len(set(args.formats)):
-        parser.error('--formats cannot contain duplicates')
     return args
 
 
@@ -152,7 +135,6 @@ def build_figure(
 
 
 def run(args):
-    start_time = time.time()
     baseline = np.asarray(args.baseline, dtype=np.float64)
     car = np.asarray(args.car, dtype=np.float64)
     figure, differences = build_figure(
@@ -166,30 +148,22 @@ def run(args):
 
     output_prefix = Path(args.output_prefix).expanduser().resolve()
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    outputs = {}
+    output_path = Path(f'{output_prefix}.pdf')
     try:
-        for output_format in args.formats:
-            output_path = Path(f'{output_prefix}.{output_format}')
-            save_options = {
-                'bbox_inches': 'tight',
-                'facecolor': 'white',
-            }
-            if output_format == 'png':
-                save_options['dpi'] = args.dpi
-            figure.savefig(output_path, **save_options)
-            outputs[output_format] = str(output_path)
-            print(f'Saved {output_format.upper()}: {output_path}')
+        figure.savefig(
+            output_path,
+            bbox_inches='tight',
+            facecolor='white',
+        )
     finally:
         plt.close(figure)
+    print(f'Saved PDF: {output_path}')
 
-    summary_path = Path(f'{output_prefix}.summary.json')
-    outputs['summary'] = str(summary_path)
-    elapsed = time.time() - start_time
     summary = {
-        'schema_version': 1,
         'protocol_label': args.protocol_label,
         'baseline_label': args.baseline_label,
         'car_label': args.car_label,
+        'output_pdf': str(output_path),
         'metrics': [
             {
                 'name': name,
@@ -204,21 +178,7 @@ def run(args):
                 differences,
             )
         ],
-        'outputs': outputs,
-        'metadata': {
-            'script': str(Path(__file__).resolve()),
-            'generated_at_utc': datetime.now(timezone.utc).isoformat(),
-            'runtime_seconds': elapsed,
-            'python_version': platform.python_version(),
-            'numpy_version': np.__version__,
-            'matplotlib_version': matplotlib.__version__,
-            'platform': platform.platform(),
-        },
     }
-    with summary_path.open('w', encoding='utf-8') as output_file:
-        json.dump(summary, output_file, indent=2, sort_keys=True, allow_nan=False)
-        output_file.write('\n')
-    print(f'Saved summary: {summary_path}')
     for metric in summary['metrics']:
         print(
             f"{metric['name']}: {metric['baseline']:.2f} -> "
