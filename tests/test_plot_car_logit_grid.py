@@ -191,6 +191,14 @@ class PlotCarLogitGridTests(unittest.TestCase):
             self.assertEqual(summary['plot']['layout'], 'diffusion-only')
             self.assertEqual(summary['plot']['diffusion_plot_kind'], 'kde')
             self.assertEqual(summary['plot']['kde_grid_points'], 320)
+            self.assertFalse(
+                summary['plot']['diffusion_only_protocol_heading'])
+            self.assertFalse(
+                summary['plot']['diffusion_only_density_axis_title'])
+            self.assertEqual(
+                summary['plot']['diffusion_only_column_labels'],
+                'panel letter and source name below each column',
+            )
             self.assertIsNone(summary['plot']['gan_plot_kind'])
             self.assertIsNone(summary['plot']['gan_density_scale'])
             self.assertIsNone(summary['protocols']['gan'])

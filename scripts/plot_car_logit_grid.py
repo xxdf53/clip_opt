@@ -880,18 +880,7 @@ def build_figure(
             )
 
         panel_letter = chr(ord('a') + column_index)
-        if method_row_layout:
-            axes[0, column_index].text(
-                0.0,
-                1.035,
-                f'({panel_letter})',
-                transform=axes[0, column_index].transAxes,
-                ha='left',
-                va='bottom',
-                fontsize=7.6,
-                fontweight='bold',
-            )
-        else:
+        if not method_row_layout:
             axes[0, column_index].set_title(
                 f'({panel_letter}) {source["display_name"]}',
                 pad=4.0,
@@ -911,8 +900,6 @@ def build_figure(
               else 'Density (log scale)')
     )
     if gan_data is None:
-        axes[0, 0].set_ylabel(diffusion_ylabel)
-        axes[1, 0].set_ylabel(diffusion_ylabel)
         diffusion_start = 0
     else:
         axes[0, 0].set_ylabel(gan_ylabel)
@@ -926,7 +913,7 @@ def build_figure(
         left=0.105 if method_row_layout else 0.11,
         right=0.992,
         bottom=0.22 if method_row_layout else 0.17,
-        top=0.84 if method_row_layout else 0.79,
+        top=0.95 if method_row_layout else 0.79,
         wspace=0.28,
         hspace=0.28 if method_row_layout else 0.26,
     )
@@ -1004,10 +991,11 @@ def build_figure(
     if method_row_layout:
         for column_index, source in enumerate(diffusion_data['sources']):
             axis_position = axes[1, column_index].get_position()
+            panel_letter = chr(ord('a') + column_index)
             figure.text(
                 (axis_position.x0 + axis_position.x1) / 2.0,
                 0.105,
-                source['display_name'],
+                f'({panel_letter}) {source["display_name"]}',
                 ha='center',
                 va='center',
                 fontsize=7.6,
@@ -1017,15 +1005,16 @@ def build_figure(
     diffusion_left = axes[0, diffusion_start].get_position().x0
     diffusion_right = axes[0, -1].get_position().x1
     heading_y = 0.955 if method_row_layout else 0.935
-    figure.text(
-        (diffusion_left + diffusion_right) / 2.0,
-        heading_y,
-        'Diffusion protocol',
-        ha='center',
-        va='center',
-        fontsize=8.6,
-        fontweight='bold',
-    )
+    if not method_row_layout:
+        figure.text(
+            (diffusion_left + diffusion_right) / 2.0,
+            heading_y,
+            'Diffusion protocol',
+            ha='center',
+            va='center',
+            fontsize=8.6,
+            fontweight='bold',
+        )
     if gan_data is not None:
         gan_left = axes[0, 0].get_position().x0
         gan_right = axes[0, diffusion_start - 1].get_position().x1
@@ -1258,6 +1247,17 @@ def run(args):
             ),
             'kde_grid_points': (
                 KDE_GRID_POINTS if args.diffusion_plot_kind == 'kde' else None
+            ),
+            'diffusion_only_protocol_heading': (
+                False if args.layout == 'diffusion-only' else None
+            ),
+            'diffusion_only_density_axis_title': (
+                False if args.layout == 'diffusion-only' else None
+            ),
+            'diffusion_only_column_labels': (
+                'panel letter and source name below each column'
+                if args.layout == 'diffusion-only'
+                else None
             ),
             'width_inches': args.width,
             'height_inches': args.height,
