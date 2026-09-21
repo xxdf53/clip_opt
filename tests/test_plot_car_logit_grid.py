@@ -145,8 +145,12 @@ class PlotCarLogitGridTests(unittest.TestCase):
             self.assertEqual(summary['plot']['gan_bins'], 8)
             self.assertEqual(summary['plot']['diffusion_bins'], 8)
             self.assertIn(
-                'within each source',
+                'within each source and class',
                 summary['figure_contract']['axis_comparability'],
+            )
+            self.assertIn(
+                'rows encode Real/Generated classes',
+                summary['figure_contract']['layout'],
             )
 
 

@@ -30,6 +30,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+from matplotlib.ticker import (
+    LogFormatterMathtext,
+    LogLocator,
+    MaxNLocator,
+    NullFormatter,
+)
 
 from utils.logit_distribution import build_shared_bin_edges, compute_logit_stats
 
@@ -38,6 +44,7 @@ REQUIRED_FIELDS = ('generator', 'path', 'label', 'raw_logit', 'score')
 SUPPORTED_FORMATS = ('svg', 'pdf', 'png')
 REAL_COLOR = '#6F9FC7'
 GENERATED_COLOR = '#E89A55'
+BASELINE_COLOR = '#737373'
 DEFAULT_GAN_SOURCES = (
     'deepfake=Deepfakes',
     'crn=CRN',
@@ -367,12 +374,12 @@ def configure_matplotlib():
             'Arial', 'Helvetica', 'DejaVu Sans', 'Liberation Sans',
             'sans-serif',
         ],
-        'font.size': 6.3,
-        'axes.labelsize': 6.3,
-        'axes.titlesize': 7.1,
-        'xtick.labelsize': 5.7,
-        'ytick.labelsize': 5.7,
-        'legend.fontsize': 5.2,
+        'font.size': 6.6,
+        'axes.labelsize': 6.8,
+        'axes.titlesize': 7.6,
+        'xtick.labelsize': 6.2,
+        'ytick.labelsize': 7.2,
+        'legend.fontsize': 6.0,
         'axes.spines.top': False,
         'axes.spines.right': False,
         'axes.linewidth': 0.65,
@@ -480,71 +487,84 @@ def require_matplotlib_panel_alignment(
     return report
 
 
-def plot_histogram(axis, distributions, bin_edges, density_scale):
-    for key, label, color in (
-        ('real', 'Real', REAL_COLOR),
-        ('generated', 'Generated', GENERATED_COLOR),
-    ):
-        values = distributions[key]
-        axis.hist(
-            values,
-            bins=bin_edges,
-            density=True,
-            histtype='stepfilled',
-            color=color,
-            alpha=0.42,
-            edgecolor=color,
-            linewidth=0.45,
-            label=f'{label} (n={values.size:,})',
-        )
-        axis.hist(
-            values,
-            bins=bin_edges,
-            density=True,
-            histtype='step',
-            color=color,
-            linewidth=0.7,
-        )
+def plot_histogram_comparison(
+    axis,
+    source,
+    class_key,
+    bin_edges,
+    density_scale,
+):
+    class_color = REAL_COLOR if class_key == 'real' else GENERATED_COLOR
+    baseline_values = source['baseline'][class_key]
+    car_values = source['car'][class_key]
+
+    axis.hist(
+        car_values,
+        bins=bin_edges,
+        density=True,
+        histtype='stepfilled',
+        color=class_color,
+        alpha=0.22,
+        edgecolor='none',
+    )
+    axis.hist(
+        baseline_values,
+        bins=bin_edges,
+        density=True,
+        histtype='step',
+        color=BASELINE_COLOR,
+        linewidth=0.95,
+        linestyle=(0, (3.0, 2.0)),
+    )
+    axis.hist(
+        car_values,
+        bins=bin_edges,
+        density=True,
+        histtype='step',
+        color=class_color,
+        linewidth=1.15,
+    )
     axis.set_yscale(density_scale)
+    if density_scale == 'log':
+        axis.yaxis.set_major_locator(LogLocator(base=10, numticks=5))
+        axis.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
+        axis.yaxis.set_minor_formatter(NullFormatter())
+    else:
+        axis.yaxis.set_major_locator(MaxNLocator(nbins=4))
 
 
-def plot_ecdf(axis, distributions):
-    for key, label, color in (
-        ('real', 'Real', REAL_COLOR),
-        ('generated', 'Generated', GENERATED_COLOR),
+def plot_ecdf_comparison(axis, source, class_key):
+    class_color = REAL_COLOR if class_key == 'real' else GENERATED_COLOR
+    for method_key, color, linestyle, linewidth in (
+        ('baseline', BASELINE_COLOR, (0, (3.0, 2.0)), 0.95),
+        ('car', class_color, 'solid', 1.15),
     ):
-        values = np.sort(distributions[key])
+        values = np.sort(source[method_key][class_key])
         cumulative = np.arange(1, values.size + 1) / values.size
         axis.step(
             values,
             cumulative,
             where='post',
             color=color,
-            linewidth=0.9,
-            label=f'{label} (n={values.size:,})',
+            linewidth=linewidth,
+            linestyle=linestyle,
         )
 
 
 def style_axis(axis, bin_edges):
     axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
     axis.grid(axis='y', color='#D8D8D8', linewidth=0.4, alpha=0.55)
-    axis.tick_params(length=2.5, pad=1.5)
-    axis.legend(
-        loc='upper right',
-        frameon=False,
-        handlelength=1.0,
-        handletextpad=0.35,
-        borderaxespad=0.2,
-        labelspacing=0.15,
-    )
+    axis.tick_params(length=0.0, pad=4.0)
+    axis.xaxis.labelpad = 6.0
+    axis.yaxis.labelpad = 7.0
 
 
-def equalize_source_axes(axes, bin_edges, plot_kind, density_scale):
-    """Use identical axes for Baseline/CAR of one source only.
+def align_source_class_axes(axes, bin_edges, plot_kind):
+    """Use one raw-logit range for both class rows of a source.
 
-    Different sources may have very different density peaks and therefore use
-    independent y ranges. This keeps the paired comparison fair without a
-    high-density source flattening every other column in the protocol.
+    Baseline and CAR are overlaid within each axis. Histogram y ranges remain
+    class-specific so an extreme density peak in one class cannot flatten the
+    paired method comparison in the other class.
     """
     for axis in axes:
         axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
@@ -552,16 +572,6 @@ def equalize_source_axes(axes, bin_edges, plot_kind, density_scale):
         for axis in axes:
             axis.set_ylim(0.0, 1.01)
         return
-
-    limits = [axis.get_ylim() for axis in axes]
-    upper = max(limit[1] for limit in limits)
-    if density_scale == 'linear':
-        lower = 0.0
-    else:
-        positive_lowers = [limit[0] for limit in limits if limit[0] > 0]
-        lower = min(positive_lowers) if positive_lowers else 1e-6
-    for axis in axes:
-        axis.set_ylim(lower, upper)
 
 
 def build_figure(
@@ -602,27 +612,25 @@ def build_figure(
         settings = protocol_settings[protocol_name]
         bin_edges = source['bin_edges']
         source_axes = []
-        for row_index, method_key in enumerate(('baseline', 'car')):
+        for row_index, class_key in enumerate(('real', 'generated')):
             axis = axes[row_index, column_index]
             if settings['plot_kind'] == 'histogram':
-                plot_histogram(
+                plot_histogram_comparison(
                     axis,
-                    source[method_key],
+                    source,
+                    class_key,
                     bin_edges,
                     settings['density_scale'],
                 )
             else:
-                plot_ecdf(axis, source[method_key])
+                plot_ecdf_comparison(axis, source, class_key)
             style_axis(axis, bin_edges)
             source_axes.append(axis)
-            if row_index == 1:
-                axis.set_xlabel('Raw logit')
 
-        equalize_source_axes(
+        align_source_class_axes(
             source_axes,
             bin_edges,
             settings['plot_kind'],
-            settings['density_scale'],
         )
 
         panel_letter = chr(ord('a') + column_index)
@@ -652,38 +660,72 @@ def build_figure(
         axes[1, diffusion_start].set_ylabel(diffusion_ylabel)
 
     figure.subplots_adjust(
-        left=0.085,
+        left=0.11,
         right=0.992,
-        bottom=0.15,
+        bottom=0.17,
         top=0.79,
-        wspace=0.18,
+        wspace=0.28,
         hspace=0.26,
     )
     figure.canvas.draw()
 
-    top_midpoint = sum(axes[0, 0].get_position().intervaly) / 2.0
-    bottom_midpoint = sum(axes[1, 0].get_position().intervaly) / 2.0
+    plot_left = axes[1, 0].get_position().x0
+    plot_right = axes[1, -1].get_position().x1
     figure.text(
-        0.018,
-        top_midpoint,
-        'C2P-CLIP',
-        rotation=90,
-        rotation_mode='anchor',
+        (plot_left + plot_right) / 2.0,
+        0.055,
+        'Raw logit',
         ha='center',
         va='center',
-        fontsize=7.2,
+        fontsize=6.8,
+    )
+
+    figure.text(
+        0.018,
+        axes[0, 0].get_position().y1 + 0.012,
+        'Real',
+        ha='left',
+        va='bottom',
+        fontsize=7.8,
         fontweight='bold',
+        color=REAL_COLOR,
     )
     figure.text(
         0.018,
-        bottom_midpoint,
-        'CAR',
-        rotation=90,
-        rotation_mode='anchor',
-        ha='center',
-        va='center',
-        fontsize=7.2,
+        axes[1, 0].get_position().y1 + 0.012,
+        'Generated',
+        ha='left',
+        va='bottom',
+        fontsize=7.8,
         fontweight='bold',
+        color=GENERATED_COLOR,
+    )
+
+    method_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=BASELINE_COLOR,
+            linewidth=1.0,
+            linestyle=(0, (3.0, 2.0)),
+            label='C2P-CLIP',
+        ),
+        Line2D(
+            [0],
+            [0],
+            color='#222222',
+            linewidth=1.2,
+            label='CAR',
+        ),
+    ]
+    figure.legend(
+        handles=method_handles,
+        loc='upper center',
+        bbox_to_anchor=(0.5, 0.875),
+        ncol=2,
+        frameon=False,
+        handlelength=2.0,
+        columnspacing=1.2,
     )
 
     gan_left = axes[0, 0].get_position().x0
@@ -697,7 +739,7 @@ def build_figure(
         'GAN protocol',
         ha='center',
         va='center',
-        fontsize=8.0,
+        fontsize=8.6,
         fontweight='bold',
     )
     figure.text(
@@ -706,13 +748,13 @@ def build_figure(
         'Diffusion protocol',
         ha='center',
         va='center',
-        fontsize=8.0,
+        fontsize=8.6,
         fontweight='bold',
     )
     separator_x = (gan_right + diffusion_left) / 2.0
     figure.add_artist(Line2D(
         [separator_x, separator_x],
-        [0.12, 0.965],
+        [0.12, 0.80],
         transform=figure.transFigure,
         color='#B8B8B8',
         linewidth=0.65,
@@ -853,8 +895,13 @@ def run(args):
             'selection': 'explicit representative sources; no automatic ranking',
             'all_matching_samples_included': True,
             'axis_comparability': (
-                'Baseline and CAR share bins and axes within each source; '
-                'different sources use independent ranges'
+                'Baseline and CAR are overlaid with identical bins and axes '
+                'within each source and class; class rows share the source '
+                'raw-logit range'
+            ),
+            'layout': (
+                'rows encode Real/Generated classes; line style encodes '
+                'C2P-CLIP/CAR methods'
             ),
         },
         'inputs': {
