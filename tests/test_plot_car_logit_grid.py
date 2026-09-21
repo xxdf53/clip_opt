@@ -153,6 +153,56 @@ class PlotCarLogitGridTests(unittest.TestCase):
                 summary['figure_contract']['layout'],
             )
 
+    def test_cli_writes_diffusion_only_four_source_grid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            diffusion_baseline = root / 'diffusion_baseline.csv'
+            diffusion_car = root / 'diffusion_car.csv'
+            diffusion_sources = ('adm', 'glide', 'sdv5', 'vqdm')
+            write_predictions(
+                diffusion_baseline,
+                [
+                    row
+                    for source in diffusion_sources
+                    for row in source_rows(source)
+                ],
+            )
+            write_predictions(
+                diffusion_car,
+                [
+                    row
+                    for source in diffusion_sources
+                    for row in source_rows(source, offset=0.2)
+                ],
+            )
+            output_prefix = root / 'output' / 'diffusion_only_logit_grid'
+
+            summary = main([
+                '--layout', 'diffusion-only',
+                '--diffusion_baseline_csv', str(diffusion_baseline),
+                '--diffusion_car_csv', str(diffusion_car),
+                '--output_prefix', str(output_prefix),
+                '--formats', 'png',
+                '--bins', '8',
+                '--dpi', '120',
+            ])
+
+            self.assertTrue(Path(f'{output_prefix}.png').is_file())
+            self.assertEqual(summary['plot']['layout'], 'diffusion-only')
+            self.assertIsNone(summary['plot']['gan_plot_kind'])
+            self.assertIsNone(summary['plot']['gan_density_scale'])
+            self.assertIsNone(summary['protocols']['gan'])
+            self.assertIsNone(summary['alignment']['gan_same_set_and_order'])
+            self.assertEqual(summary['inputs']['gan_baseline'], [])
+            self.assertEqual(summary['inputs']['gan_car'], [])
+            self.assertEqual(
+                [
+                    source['display_name']
+                    for source in summary['protocols']['diffusion']['sources']
+                ],
+                ['ADM', 'GLIDE', 'SDv5', 'VQDM'],
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

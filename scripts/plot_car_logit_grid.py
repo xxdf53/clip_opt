@@ -1,8 +1,9 @@
 """Plot a C2P-CLIP Figure-5-style baseline-versus-CAR logit grid.
 
-The figure uses two method rows (C2P-CLIP and CAR) and explicit test-source
-columns.  Prediction CSVs must contain the fields emitted by the unified
-binary evaluator: generator, path, label, raw_logit, and score.
+The figure uses Real/Generated rows and overlays C2P-CLIP/CAR within explicit
+test-source columns.  It supports either a mixed GAN-plus-diffusion layout or
+a diffusion-only layout.  Prediction CSVs must contain the fields emitted by
+the unified binary evaluator: generator, path, label, raw_logit, and score.
 
 The script never selects sources from their measured performance.  Sources
 are fixed by the command line, all matching observations are retained, and
@@ -53,6 +54,12 @@ DEFAULT_DIFFUSION_SOURCES = (
     'adm=ADM',
     'vqdm=VQDM',
 )
+DEFAULT_DIFFUSION_ONLY_SOURCES = (
+    'adm=ADM',
+    'glide=GLIDE',
+    'sdv5=SDv5',
+    'vqdm=VQDM',
+)
 
 
 def parse_args(argv=None):
@@ -63,33 +70,38 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument(
+        '--layout',
+        choices=('mixed', 'diffusion-only'),
+        default='mixed',
+        help=(
+            'mixed plots GAN and diffusion sources; diffusion-only plots '
+            'four diffusion sources and does not require GAN CSVs'
+        ),
+    )
+    parser.add_argument(
         '--gan_baseline_csv',
         nargs='+',
-        required=True,
         help='one or more GAN-protocol baseline prediction CSVs',
     )
     parser.add_argument(
         '--gan_car_csv',
         nargs='+',
-        required=True,
         help='one or more GAN-protocol CAR prediction CSVs',
     )
     parser.add_argument(
         '--diffusion_baseline_csv',
         nargs='+',
-        required=True,
         help='one or more diffusion-protocol baseline prediction CSVs',
     )
     parser.add_argument(
         '--diffusion_car_csv',
         nargs='+',
-        required=True,
         help='one or more diffusion-protocol CAR prediction CSVs',
     )
     parser.add_argument(
         '--gan_sources',
         nargs='+',
-        default=list(DEFAULT_GAN_SOURCES),
+        default=None,
         metavar='CSV_NAME=DISPLAY_NAME',
         help=(
             'fixed GAN source columns; default: '
@@ -99,10 +111,12 @@ def parse_args(argv=None):
     parser.add_argument(
         '--diffusion_sources',
         nargs='+',
-        default=list(DEFAULT_DIFFUSION_SOURCES),
+        default=None,
         metavar='CSV_NAME=DISPLAY_NAME',
         help=(
-            'fixed diffusion source columns; default: adm=ADM vqdm=VQDM'
+            'fixed diffusion source columns; mixed default: adm=ADM '
+            'vqdm=VQDM; diffusion-only default: adm=ADM glide=GLIDE '
+            'sdv5=SDv5 vqdm=VQDM'
         ),
     )
     parser.add_argument('--output_prefix', required=True)
@@ -163,6 +177,17 @@ def parse_args(argv=None):
         parser.error('--dpi must be a positive integer')
     if args.width <= 0 or args.height <= 0:
         parser.error('--width and --height must be positive')
+    if args.diffusion_baseline_csv is None or args.diffusion_car_csv is None:
+        parser.error(
+            '--diffusion_baseline_csv and --diffusion_car_csv are required')
+    if args.layout == 'mixed':
+        if args.gan_baseline_csv is None or args.gan_car_csv is None:
+            parser.error(
+                '--gan_baseline_csv and --gan_car_csv are required for '
+                '--layout mixed')
+    elif args.gan_baseline_csv is not None or args.gan_car_csv is not None:
+        parser.error(
+            'GAN CSV arguments are not used with --layout diffusion-only')
     if len(args.formats) != len(set(args.formats)):
         parser.error('--formats cannot contain duplicates')
     if args.gan_plot_kind == 'ecdf' and args.gan_density_scale != 'linear':
@@ -174,8 +199,20 @@ def parse_args(argv=None):
         parser.error(
             '--diffusion_density_scale=log cannot be combined with ECDF')
 
-    args.gan_sources = parse_source_specs(args.gan_sources)
-    args.diffusion_sources = parse_source_specs(args.diffusion_sources)
+    gan_source_values = (
+        args.gan_sources
+        if args.gan_sources is not None
+        else list(DEFAULT_GAN_SOURCES)
+    )
+    diffusion_source_values = args.diffusion_sources
+    if diffusion_source_values is None:
+        diffusion_source_values = list(
+            DEFAULT_DIFFUSION_ONLY_SOURCES
+            if args.layout == 'diffusion-only'
+            else DEFAULT_DIFFUSION_SOURCES
+        )
+    args.gan_sources = parse_source_specs(gan_source_values)
+    args.diffusion_sources = parse_source_specs(diffusion_source_values)
     return args
 
 
@@ -585,10 +622,11 @@ def build_figure(
     height,
 ):
     configure_matplotlib()
-    columns = [
-        *[('GAN', source) for source in gan_data['sources']],
-        *[('Diffusion', source) for source in diffusion_data['sources']],
-    ]
+    columns = []
+    if gan_data is not None:
+        columns.extend(('GAN', source) for source in gan_data['sources'])
+    columns.extend(
+        ('Diffusion', source) for source in diffusion_data['sources'])
     figure, axes = plt.subplots(
         2,
         len(columns),
@@ -596,17 +634,18 @@ def build_figure(
         squeeze=False,
     )
     protocol_settings = {
-        'GAN': {
-            'data': gan_data,
-            'plot_kind': gan_plot_kind,
-            'density_scale': gan_density_scale,
-        },
         'Diffusion': {
             'data': diffusion_data,
             'plot_kind': diffusion_plot_kind,
             'density_scale': diffusion_density_scale,
         },
     }
+    if gan_data is not None:
+        protocol_settings['GAN'] = {
+            'data': gan_data,
+            'plot_kind': gan_plot_kind,
+            'density_scale': gan_density_scale,
+        }
 
     for column_index, (protocol_name, source) in enumerate(columns):
         settings = protocol_settings[protocol_name]
@@ -652,12 +691,17 @@ def build_figure(
         else ('Density' if diffusion_density_scale == 'linear'
               else 'Density (log scale)')
     )
-    axes[0, 0].set_ylabel(gan_ylabel)
-    axes[1, 0].set_ylabel(gan_ylabel)
-    diffusion_start = len(gan_data['sources'])
-    if diffusion_ylabel != gan_ylabel:
-        axes[0, diffusion_start].set_ylabel(diffusion_ylabel)
-        axes[1, diffusion_start].set_ylabel(diffusion_ylabel)
+    if gan_data is None:
+        axes[0, 0].set_ylabel(diffusion_ylabel)
+        axes[1, 0].set_ylabel(diffusion_ylabel)
+        diffusion_start = 0
+    else:
+        axes[0, 0].set_ylabel(gan_ylabel)
+        axes[1, 0].set_ylabel(gan_ylabel)
+        diffusion_start = len(gan_data['sources'])
+        if diffusion_ylabel != gan_ylabel:
+            axes[0, diffusion_start].set_ylabel(diffusion_ylabel)
+            axes[1, diffusion_start].set_ylabel(diffusion_ylabel)
 
     figure.subplots_adjust(
         left=0.11,
@@ -728,20 +772,9 @@ def build_figure(
         columnspacing=1.2,
     )
 
-    gan_left = axes[0, 0].get_position().x0
-    gan_right = axes[0, diffusion_start - 1].get_position().x1
     diffusion_left = axes[0, diffusion_start].get_position().x0
     diffusion_right = axes[0, -1].get_position().x1
     heading_y = 0.935
-    figure.text(
-        (gan_left + gan_right) / 2.0,
-        heading_y,
-        'GAN protocol',
-        ha='center',
-        va='center',
-        fontsize=8.6,
-        fontweight='bold',
-    )
     figure.text(
         (diffusion_left + diffusion_right) / 2.0,
         heading_y,
@@ -751,15 +784,27 @@ def build_figure(
         fontsize=8.6,
         fontweight='bold',
     )
-    separator_x = (gan_right + diffusion_left) / 2.0
-    figure.add_artist(Line2D(
-        [separator_x, separator_x],
-        [0.12, 0.80],
-        transform=figure.transFigure,
-        color='#B8B8B8',
-        linewidth=0.65,
-        linestyle=(0, (3, 3)),
-    ))
+    if gan_data is not None:
+        gan_left = axes[0, 0].get_position().x0
+        gan_right = axes[0, diffusion_start - 1].get_position().x1
+        figure.text(
+            (gan_left + gan_right) / 2.0,
+            heading_y,
+            'GAN protocol',
+            ha='center',
+            va='center',
+            fontsize=8.6,
+            fontweight='bold',
+        )
+        separator_x = (gan_right + diffusion_left) / 2.0
+        figure.add_artist(Line2D(
+            [separator_x, separator_x],
+            [0.12, 0.80],
+            transform=figure.transFigure,
+            color='#B8B8B8',
+            linewidth=0.65,
+            linestyle=(0, (3, 3)),
+        ))
     return figure, axes
 
 
@@ -804,25 +849,29 @@ def summarize_protocol(protocol_data):
 
 def run(args):
     start_time = time.time()
-    gan_baseline_paths, gan_baseline_records = load_prediction_csvs(
-        args.gan_baseline_csv)
-    gan_car_paths, gan_car_records = load_prediction_csvs(args.gan_car_csv)
+    gan_baseline_paths = []
+    gan_car_paths = []
+    gan_data = None
+    if args.layout == 'mixed':
+        gan_baseline_paths, gan_baseline_records = load_prediction_csvs(
+            args.gan_baseline_csv)
+        gan_car_paths, gan_car_records = load_prediction_csvs(args.gan_car_csv)
+        validate_alignment(gan_baseline_records, gan_car_records, 'GAN')
+        gan_data = build_protocol_data(
+            gan_baseline_records,
+            gan_car_records,
+            args.gan_sources,
+            args.gan_bins if args.gan_bins is not None else args.bins,
+        )
     diffusion_baseline_paths, diffusion_baseline_records = load_prediction_csvs(
         args.diffusion_baseline_csv)
     diffusion_car_paths, diffusion_car_records = load_prediction_csvs(
         args.diffusion_car_csv)
 
-    validate_alignment(gan_baseline_records, gan_car_records, 'GAN')
     validate_alignment(
         diffusion_baseline_records,
         diffusion_car_records,
         'Diffusion',
-    )
-    gan_data = build_protocol_data(
-        gan_baseline_records,
-        gan_car_records,
-        args.gan_sources,
-        args.gan_bins if args.gan_bins is not None else args.bins,
     )
     diffusion_data = build_protocol_data(
         diffusion_baseline_records,
@@ -912,32 +961,53 @@ def run(args):
         },
         'alignment': {
             'identity_fields': ['generator', 'path', 'label'],
-            'gan_same_set_and_order': True,
+            'gan_same_set_and_order': (
+                True if args.layout == 'mixed' else None
+            ),
             'diffusion_same_set_and_order': True,
             'panel_geometry_report': str(alignment_path),
             'panel_geometry_verdict': alignment_report['verdict'],
         },
         'plot': {
+            'layout': args.layout,
             'gan_bins': (
-                args.gan_bins if args.gan_bins is not None else args.bins
+                (args.gan_bins if args.gan_bins is not None else args.bins)
+                if args.layout == 'mixed'
+                else None
             ),
             'diffusion_bins': (
                 args.diffusion_bins
                 if args.diffusion_bins is not None
                 else args.bins
             ),
-            'gan_plot_kind': args.gan_plot_kind,
+            'gan_plot_kind': (
+                args.gan_plot_kind if args.layout == 'mixed' else None
+            ),
             'diffusion_plot_kind': args.diffusion_plot_kind,
-            'gan_density_scale': args.gan_density_scale,
+            'gan_density_scale': (
+                args.gan_density_scale if args.layout == 'mixed' else None
+            ),
             'diffusion_density_scale': args.diffusion_density_scale,
-            'normalization': 'per-class probability density'
-            if args.gan_plot_kind == args.diffusion_plot_kind == 'histogram'
-            else 'protocol-specific; see plot kinds',
+            'normalization': (
+                'per-class probability density'
+                if (
+                    args.diffusion_plot_kind == 'histogram'
+                    and (
+                        args.layout == 'diffusion-only'
+                        or args.gan_plot_kind == 'histogram'
+                    )
+                )
+                else 'protocol-specific; see plot kinds'
+            ),
             'width_inches': args.width,
             'height_inches': args.height,
         },
         'protocols': {
-            'gan': summarize_protocol(gan_data),
+            'gan': (
+                summarize_protocol(gan_data)
+                if gan_data is not None
+                else None
+            ),
             'diffusion': summarize_protocol(diffusion_data),
         },
         'outputs': outputs,
