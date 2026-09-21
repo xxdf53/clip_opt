@@ -189,6 +189,8 @@ class PlotCarLogitGridTests(unittest.TestCase):
 
             self.assertTrue(Path(f'{output_prefix}.png').is_file())
             self.assertEqual(summary['plot']['layout'], 'diffusion-only')
+            self.assertEqual(summary['plot']['diffusion_plot_kind'], 'kde')
+            self.assertEqual(summary['plot']['kde_grid_points'], 320)
             self.assertIsNone(summary['plot']['gan_plot_kind'])
             self.assertIsNone(summary['plot']['gan_density_scale'])
             self.assertIsNone(summary['protocols']['gan'])
@@ -209,6 +211,10 @@ class PlotCarLogitGridTests(unittest.TestCase):
             self.assertIn(
                 'shared x/y axes',
                 summary['figure_contract']['axis_comparability'],
+            )
+            self.assertIn(
+                'Gaussian kernel density estimate',
+                summary['plot']['normalization'],
             )
 
 

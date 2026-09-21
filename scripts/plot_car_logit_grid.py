@@ -32,6 +32,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from matplotlib.ticker import (
     LogFormatterMathtext,
     LogLocator,
@@ -44,6 +45,7 @@ from utils.logit_distribution import build_shared_bin_edges, compute_logit_stats
 
 REQUIRED_FIELDS = ('generator', 'path', 'label', 'raw_logit', 'score')
 SUPPORTED_FORMATS = ('svg', 'pdf', 'png')
+KDE_GRID_POINTS = 320
 REAL_COLOR = '#6F9FC7'
 GENERATED_COLOR = '#E89A55'
 BASELINE_COLOR = '#737373'
@@ -144,8 +146,8 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         '--diffusion_plot_kind',
-        choices=('histogram', 'ecdf'),
-        default='histogram',
+        choices=('histogram', 'kde', 'ecdf'),
+        default=None,
     )
     parser.add_argument(
         '--gan_density_scale',
@@ -189,6 +191,10 @@ def parse_args(argv=None):
     elif args.gan_baseline_csv is not None or args.gan_car_csv is not None:
         parser.error(
             'GAN CSV arguments are not used with --layout diffusion-only')
+    if args.diffusion_plot_kind is None:
+        args.diffusion_plot_kind = (
+            'kde' if args.layout == 'diffusion-only' else 'histogram'
+        )
     if len(args.formats) != len(set(args.formats)):
         parser.error('--formats cannot contain duplicates')
     if args.gan_plot_kind == 'ecdf' and args.gan_density_scale != 'linear':
@@ -645,6 +651,94 @@ def plot_method_ecdfs(axis, source, method_key):
         )
 
 
+def gaussian_kde_curve(values, x_grid):
+    """Return a deterministic Gaussian KDE using a robust Silverman rule."""
+    values = np.asarray(values, dtype=np.float64)
+    x_grid = np.asarray(x_grid, dtype=np.float64)
+    if values.ndim != 1 or values.size == 0:
+        raise ValueError('KDE values must be a non-empty one-dimensional array')
+    if x_grid.ndim != 1 or x_grid.size < 2:
+        raise ValueError('KDE grid must contain at least two points')
+
+    standard_deviation = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
+    first_quartile, third_quartile = np.percentile(values, [25.0, 75.0])
+    robust_scale = float((third_quartile - first_quartile) / 1.34)
+    positive_scales = [
+        scale
+        for scale in (standard_deviation, robust_scale)
+        if math.isfinite(scale) and scale > 0.0
+    ]
+    scale = min(positive_scales) if positive_scales else 0.0
+    bandwidth = 0.9 * scale * values.size ** (-0.2) if scale > 0.0 else 0.0
+    if not math.isfinite(bandwidth) or bandwidth <= 0.0:
+        grid_span = float(x_grid[-1] - x_grid[0])
+        bandwidth = max(grid_span / 100.0, np.finfo(np.float64).eps)
+
+    density = np.zeros_like(x_grid, dtype=np.float64)
+    chunk_size = 2048
+    for start in range(0, values.size, chunk_size):
+        chunk = values[start:start + chunk_size]
+        standardized = (x_grid[:, None] - chunk[None, :]) / bandwidth
+        density += np.exp(-0.5 * standardized * standardized).sum(axis=1)
+    density /= values.size * bandwidth * math.sqrt(2.0 * math.pi)
+    return density, bandwidth
+
+
+def plot_method_kdes(axis, source, method_key, bin_edges, density_scale):
+    """Plot smooth Real/Fake density curves without dropping observations."""
+    x_grid = np.linspace(
+        float(bin_edges[0]),
+        float(bin_edges[-1]),
+        KDE_GRID_POINTS,
+    )
+    for class_key, class_color in (
+        ('real', REAL_COLOR),
+        ('generated', GENERATED_COLOR),
+    ):
+        density, _ = gaussian_kde_curve(source[method_key][class_key], x_grid)
+        if density_scale == 'linear':
+            axis.fill_between(
+                x_grid,
+                0.0,
+                density,
+                color=class_color,
+                alpha=0.22,
+                linewidth=0.0,
+            )
+        axis.plot(x_grid, density, color=class_color, linewidth=1.15)
+    axis.set_yscale(density_scale)
+    if density_scale == 'log':
+        axis.yaxis.set_major_locator(LogLocator(base=10, numticks=5))
+        axis.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
+        axis.yaxis.set_minor_formatter(NullFormatter())
+    else:
+        axis.yaxis.set_major_locator(MaxNLocator(nbins=4))
+
+
+def add_class_legend(axis):
+    handles = [
+        Patch(facecolor=REAL_COLOR, edgecolor='none', alpha=0.7, label='Real'),
+        Patch(
+            facecolor=GENERATED_COLOR,
+            edgecolor='none',
+            alpha=0.7,
+            label='Fake',
+        ),
+    ]
+    axis.legend(
+        handles=handles,
+        loc='upper left',
+        ncol=2,
+        frameon=False,
+        handlelength=1.25,
+        handletextpad=0.35,
+        columnspacing=0.75,
+        borderaxespad=0.2,
+        labelspacing=0.2,
+        fontsize=5.8,
+    )
+
+
 def style_axis(axis, bin_edges):
     axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
     axis.grid(axis='y', color='#D8D8D8', linewidth=0.4, alpha=0.55)
@@ -685,10 +779,10 @@ def align_source_method_axes(
     y_limits = [axis.get_ylim() for axis in axes]
     if density_scale == 'log':
         shared_bottom = min(limit[0] for limit in y_limits)
-        shared_top = max(limit[1] for limit in y_limits)
+        shared_top = max(limit[1] for limit in y_limits) * 1.8
     else:
         shared_bottom = 0.0
-        shared_top = max(limit[1] for limit in y_limits)
+        shared_top = max(limit[1] for limit in y_limits) * 1.28
     for axis in axes:
         axis.set_ylim(shared_bottom, shared_top)
 
@@ -745,9 +839,18 @@ def build_figure(
                         bin_edges,
                         settings['density_scale'],
                     )
+                elif settings['plot_kind'] == 'kde':
+                    plot_method_kdes(
+                        axis,
+                        source,
+                        method_key,
+                        bin_edges,
+                        settings['density_scale'],
+                    )
                 else:
                     plot_method_ecdfs(axis, source, method_key)
                 style_axis(axis, bin_edges)
+                add_class_legend(axis)
                 source_axes.append(axis)
             align_source_method_axes(
                 source_axes,
@@ -777,11 +880,23 @@ def build_figure(
             )
 
         panel_letter = chr(ord('a') + column_index)
-        axes[0, column_index].set_title(
-            f'({panel_letter}) {source["display_name"]}',
-            pad=4.0,
-            fontweight='bold',
-        )
+        if method_row_layout:
+            axes[0, column_index].text(
+                0.0,
+                1.035,
+                f'({panel_letter})',
+                transform=axes[0, column_index].transAxes,
+                ha='left',
+                va='bottom',
+                fontsize=7.6,
+                fontweight='bold',
+            )
+        else:
+            axes[0, column_index].set_title(
+                f'({panel_letter}) {source["display_name"]}',
+                pad=4.0,
+                fontweight='bold',
+            )
 
     gan_ylabel = (
         'Cumulative probability'
@@ -808,12 +923,12 @@ def build_figure(
             axes[1, diffusion_start].set_ylabel(diffusion_ylabel)
 
     figure.subplots_adjust(
-        left=0.11,
+        left=0.105 if method_row_layout else 0.11,
         right=0.992,
-        bottom=0.17,
-        top=0.79,
+        bottom=0.22 if method_row_layout else 0.17,
+        top=0.84 if method_row_layout else 0.79,
         wspace=0.28,
-        hspace=0.26,
+        hspace=0.28 if method_row_layout else 0.26,
     )
     figure.canvas.draw()
 
@@ -821,7 +936,7 @@ def build_figure(
     plot_right = axes[1, -1].get_position().x1
     figure.text(
         (plot_left + plot_right) / 2.0,
-        0.055,
+        0.035 if method_row_layout else 0.055,
         'Raw logit',
         ha='center',
         va='center',
@@ -830,23 +945,14 @@ def build_figure(
 
     if method_row_layout:
         row_specs = (
-            ('C2P-CLIP', BASELINE_COLOR),
+            ('C2P-CLIP', '#222222'),
             ('CAR', '#222222'),
         )
-        legend_handles = [
-            Line2D([0], [0], color=REAL_COLOR, linewidth=1.2, label='Real'),
-            Line2D(
-                [0],
-                [0],
-                color=GENERATED_COLOR,
-                linewidth=1.2,
-                label='Generated',
-            ),
-        ]
+        legend_handles = []
     else:
         row_specs = (
             ('Real', REAL_COLOR),
-            ('Generated', GENERATED_COLOR),
+            ('Fake', GENERATED_COLOR),
         )
         legend_handles = [
             Line2D(
@@ -866,30 +972,51 @@ def build_figure(
             ),
         ]
     for row_index, (row_label, row_color) in enumerate(row_specs):
+        row_axis_position = axes[row_index, 0].get_position()
         figure.text(
             0.018,
-            axes[row_index, 0].get_position().y1 + 0.012,
+            (
+                (row_axis_position.y0 + row_axis_position.y1) / 2.0
+                if method_row_layout
+                else row_axis_position.y1 + 0.012
+            ),
             row_label,
-            ha='left',
-            va='bottom',
+            ha='center' if method_row_layout else 'left',
+            va='center' if method_row_layout else 'bottom',
             fontsize=7.8,
             fontweight='bold',
             color=row_color,
+            rotation=90 if method_row_layout else 0,
+            rotation_mode='anchor',
         )
 
-    figure.legend(
-        handles=legend_handles,
-        loc='upper center',
-        bbox_to_anchor=(0.5, 0.875),
-        ncol=2,
-        frameon=False,
-        handlelength=2.0,
-        columnspacing=1.2,
-    )
+    if not method_row_layout:
+        figure.legend(
+            handles=legend_handles,
+            loc='upper center',
+            bbox_to_anchor=(0.5, 0.875),
+            ncol=2,
+            frameon=False,
+            handlelength=2.0,
+            columnspacing=1.2,
+        )
+
+    if method_row_layout:
+        for column_index, source in enumerate(diffusion_data['sources']):
+            axis_position = axes[1, column_index].get_position()
+            figure.text(
+                (axis_position.x0 + axis_position.x1) / 2.0,
+                0.105,
+                source['display_name'],
+                ha='center',
+                va='center',
+                fontsize=7.6,
+                fontweight='bold',
+            )
 
     diffusion_left = axes[0, diffusion_start].get_position().x0
     diffusion_right = axes[0, -1].get_position().x1
-    heading_y = 0.935
+    heading_y = 0.955 if method_row_layout else 0.935
     figure.text(
         (diffusion_left + diffusion_right) / 2.0,
         heading_y,
@@ -1114,15 +1241,23 @@ def run(args):
             ),
             'diffusion_density_scale': args.diffusion_density_scale,
             'normalization': (
-                'per-class probability density'
-                if (
-                    args.diffusion_plot_kind == 'histogram'
-                    and (
-                        args.layout == 'diffusion-only'
-                        or args.gan_plot_kind == 'histogram'
+                'per-class Gaussian kernel density estimate using a robust '
+                'Silverman bandwidth and every observation'
+                if args.diffusion_plot_kind == 'kde'
+                else (
+                    'per-class probability density'
+                    if (
+                        args.diffusion_plot_kind == 'histogram'
+                        and (
+                            args.layout == 'diffusion-only'
+                            or args.gan_plot_kind == 'histogram'
+                        )
                     )
+                    else 'protocol-specific; see plot kinds'
                 )
-                else 'protocol-specific; see plot kinds'
+            ),
+            'kde_grid_points': (
+                KDE_GRID_POINTS if args.diffusion_plot_kind == 'kde' else None
             ),
             'width_inches': args.width,
             'height_inches': args.height,
