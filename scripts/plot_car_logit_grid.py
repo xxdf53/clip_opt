@@ -40,7 +40,6 @@ REAL_COLOR = '#6F9FC7'
 GENERATED_COLOR = '#E89A55'
 DEFAULT_GAN_SOURCES = (
     'deepfake=Deepfakes',
-    'seeingdark=SITD',
     'crn=CRN',
 )
 DEFAULT_DIFFUSION_SOURCES = (
@@ -87,7 +86,7 @@ def parse_args(argv=None):
         metavar='CSV_NAME=DISPLAY_NAME',
         help=(
             'fixed GAN source columns; default: '
-            'deepfake=Deepfakes seeingdark=SITD crn=CRN'
+            'deepfake=Deepfakes crn=CRN'
         ),
     )
     parser.add_argument(
@@ -101,6 +100,21 @@ def parse_args(argv=None):
     )
     parser.add_argument('--output_prefix', required=True)
     parser.add_argument('--bins', type=int, default=70)
+    parser.add_argument(
+        '--gan_bins',
+        type=int,
+        default=None,
+        help='GAN histogram bins; overrides --bins for the GAN protocol',
+    )
+    parser.add_argument(
+        '--diffusion_bins',
+        type=int,
+        default=None,
+        help=(
+            'diffusion histogram bins; overrides --bins for the diffusion '
+            'protocol'
+        ),
+    )
     parser.add_argument(
         '--gan_plot_kind',
         choices=('histogram', 'ecdf'),
@@ -134,6 +148,10 @@ def parse_args(argv=None):
 
     if args.bins <= 0:
         parser.error('--bins must be a positive integer')
+    if args.gan_bins is not None and args.gan_bins <= 0:
+        parser.error('--gan_bins must be a positive integer')
+    if args.diffusion_bins is not None and args.diffusion_bins <= 0:
+        parser.error('--diffusion_bins must be a positive integer')
     if args.dpi <= 0:
         parser.error('--dpi must be a positive integer')
     if args.width <= 0 or args.height <= 0:
@@ -316,7 +334,6 @@ def build_protocol_data(
     bins,
 ):
     sources = []
-    all_distributions = []
     for source_spec in source_specs:
         baseline = source_logits(baseline_records, source_spec)
         car = source_logits(car_records, source_spec)
@@ -326,22 +343,21 @@ def build_protocol_data(
             car['real'],
             car['generated'],
         ]
-        all_distributions.extend(distributions)
         sources.append({
             **source_spec,
             'baseline': baseline,
             'car': car,
+            'bin_edges': np.asarray(
+                build_shared_bin_edges(distributions, bins=bins),
+                dtype=np.float64,
+            ),
             'statistics': {
                 'baseline': compute_logit_stats(
                     baseline['real'], baseline['generated']),
                 'car': compute_logit_stats(car['real'], car['generated']),
             },
         })
-    bin_edges = np.asarray(
-        build_shared_bin_edges(all_distributions, bins=bins),
-        dtype=np.float64,
-    )
-    return {'sources': sources, 'bin_edges': bin_edges}
+    return {'sources': sources}
 
 
 def configure_matplotlib():
@@ -523,7 +539,13 @@ def style_axis(axis, bin_edges):
     )
 
 
-def equalize_protocol_axes(axes, bin_edges, plot_kind, density_scale):
+def equalize_source_axes(axes, bin_edges, plot_kind, density_scale):
+    """Use identical axes for Baseline/CAR of one source only.
+
+    Different sources may have very different density peaks and therefore use
+    independent y ranges. This keeps the paired comparison fair without a
+    high-density source flattening every other column in the protocol.
+    """
     for axis in axes:
         axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
     if plot_kind == 'ecdf':
@@ -576,10 +598,10 @@ def build_figure(
         },
     }
 
-    protocol_axes = {'GAN': [], 'Diffusion': []}
     for column_index, (protocol_name, source) in enumerate(columns):
         settings = protocol_settings[protocol_name]
-        bin_edges = settings['data']['bin_edges']
+        bin_edges = source['bin_edges']
+        source_axes = []
         for row_index, method_key in enumerate(('baseline', 'car')):
             axis = axes[row_index, column_index]
             if settings['plot_kind'] == 'histogram':
@@ -592,23 +614,22 @@ def build_figure(
             else:
                 plot_ecdf(axis, source[method_key])
             style_axis(axis, bin_edges)
-            protocol_axes[protocol_name].append(axis)
+            source_axes.append(axis)
             if row_index == 1:
                 axis.set_xlabel('Raw logit')
+
+        equalize_source_axes(
+            source_axes,
+            bin_edges,
+            settings['plot_kind'],
+            settings['density_scale'],
+        )
 
         panel_letter = chr(ord('a') + column_index)
         axes[0, column_index].set_title(
             f'({panel_letter}) {source["display_name"]}',
             pad=4.0,
             fontweight='bold',
-        )
-
-    for protocol_name, settings in protocol_settings.items():
-        equalize_protocol_axes(
-            protocol_axes[protocol_name],
-            settings['data']['bin_edges'],
-            settings['plot_kind'],
-            settings['density_scale'],
         )
 
     gan_ylabel = (
@@ -719,7 +740,6 @@ def json_safe_stats(stats):
 
 def summarize_protocol(protocol_data):
     return {
-        'shared_bin_edges': protocol_data['bin_edges'].tolist(),
         'sources': [
             {
                 'csv_name': source['csv_name'],
@@ -728,6 +748,7 @@ def summarize_protocol(protocol_data):
                     'real': int(source['baseline']['real'].size),
                     'generated': int(source['baseline']['generated'].size),
                 },
+                'shared_bin_edges': source['bin_edges'].tolist(),
                 'statistics': {
                     'baseline': json_safe_stats(
                         source['statistics']['baseline']),
@@ -759,13 +780,17 @@ def run(args):
         gan_baseline_records,
         gan_car_records,
         args.gan_sources,
-        args.bins,
+        args.gan_bins if args.gan_bins is not None else args.bins,
     )
     diffusion_data = build_protocol_data(
         diffusion_baseline_records,
         diffusion_car_records,
         args.diffusion_sources,
-        args.bins,
+        (
+            args.diffusion_bins
+            if args.diffusion_bins is not None
+            else args.bins
+        ),
     )
 
     output_prefix = Path(args.output_prefix).expanduser().resolve()
@@ -827,6 +852,10 @@ def run(args):
             'quantity': 'class-conditional raw-logit distributions',
             'selection': 'explicit representative sources; no automatic ranking',
             'all_matching_samples_included': True,
+            'axis_comparability': (
+                'Baseline and CAR share bins and axes within each source; '
+                'different sources use independent ranges'
+            ),
         },
         'inputs': {
             'gan_baseline': summarize_inputs(gan_baseline_paths),
@@ -842,7 +871,14 @@ def run(args):
             'panel_geometry_verdict': alignment_report['verdict'],
         },
         'plot': {
-            'bins': args.bins,
+            'gan_bins': (
+                args.gan_bins if args.gan_bins is not None else args.bins
+            ),
+            'diffusion_bins': (
+                args.diffusion_bins
+                if args.diffusion_bins is not None
+                else args.bins
+            ),
             'gan_plot_kind': args.gan_plot_kind,
             'diffusion_plot_kind': args.diffusion_plot_kind,
             'gan_density_scale': args.gan_density_scale,

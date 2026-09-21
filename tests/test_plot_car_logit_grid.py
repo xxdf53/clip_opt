@@ -71,7 +71,7 @@ class PlotCarLogitGridTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different image sets'):
             validate_alignment(baseline, changed, 'GAN')
 
-    def test_cli_writes_two_by_five_grid_and_audit_summary(self):
+    def test_cli_writes_two_by_four_grid_and_audit_summary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             gan_baseline = root / 'gan_baseline.csv'
@@ -79,7 +79,7 @@ class PlotCarLogitGridTests(unittest.TestCase):
             diffusion_baseline = root / 'diffusion_baseline.csv'
             diffusion_car = root / 'diffusion_car.csv'
 
-            gan_sources = ('deepfake', 'seeingdark', 'crn')
+            gan_sources = ('deepfake', 'crn')
             diffusion_sources = ('adm', 'vqdm')
             write_predictions(
                 gan_baseline,
@@ -130,7 +130,7 @@ class PlotCarLogitGridTests(unittest.TestCase):
             self.assertEqual(
                 [source['display_name']
                  for source in saved['protocols']['gan']['sources']],
-                ['Deepfakes', 'SITD', 'CRN'],
+                ['Deepfakes', 'CRN'],
             )
             self.assertEqual(
                 [source['display_name']
@@ -142,6 +142,12 @@ class PlotCarLogitGridTests(unittest.TestCase):
                 True,
             )
             self.assertEqual(summary['alignment']['gan_same_set_and_order'], True)
+            self.assertEqual(summary['plot']['gan_bins'], 8)
+            self.assertEqual(summary['plot']['diffusion_bins'], 8)
+            self.assertIn(
+                'within each source',
+                summary['figure_contract']['axis_comparability'],
+            )
 
 
 if __name__ == '__main__':
