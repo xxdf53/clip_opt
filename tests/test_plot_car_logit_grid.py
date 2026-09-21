@@ -202,6 +202,14 @@ class PlotCarLogitGridTests(unittest.TestCase):
                 ],
                 ['ADM', 'GLIDE', 'SDv5', 'VQDM'],
             )
+            self.assertIn(
+                'rows encode C2P-CLIP/CAR methods',
+                summary['figure_contract']['layout'],
+            )
+            self.assertIn(
+                'shared x/y axes',
+                summary['figure_contract']['axis_comparability'],
+            )
 
 
 if __name__ == '__main__':

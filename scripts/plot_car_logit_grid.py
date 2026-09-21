@@ -1,9 +1,10 @@
 """Plot a C2P-CLIP Figure-5-style baseline-versus-CAR logit grid.
 
-The figure uses Real/Generated rows and overlays C2P-CLIP/CAR within explicit
-test-source columns.  It supports either a mixed GAN-plus-diffusion layout or
-a diffusion-only layout.  Prediction CSVs must contain the fields emitted by
-the unified binary evaluator: generator, path, label, raw_logit, and score.
+The mixed figure uses Real/Generated rows and overlays C2P-CLIP/CAR within
+explicit test-source columns.  The diffusion-only figure uses C2P-CLIP/CAR
+rows and plots Real/Generated distributions within each method panel.
+Prediction CSVs must contain the fields emitted by the unified binary
+evaluator: generator, path, label, raw_logit, and score.
 
 The script never selects sources from their measured performance.  Sources
 are fixed by the command line, all matching observations are retained, and
@@ -588,6 +589,62 @@ def plot_ecdf_comparison(axis, source, class_key):
         )
 
 
+def plot_method_histograms(
+    axis,
+    source,
+    method_key,
+    bin_edges,
+    density_scale,
+):
+    """Plot Real and Generated distributions for one method row."""
+    for class_key, class_color in (
+        ('real', REAL_COLOR),
+        ('generated', GENERATED_COLOR),
+    ):
+        values = source[method_key][class_key]
+        axis.hist(
+            values,
+            bins=bin_edges,
+            density=True,
+            histtype='stepfilled',
+            color=class_color,
+            alpha=0.24,
+            edgecolor='none',
+        )
+        axis.hist(
+            values,
+            bins=bin_edges,
+            density=True,
+            histtype='step',
+            color=class_color,
+            linewidth=1.05,
+        )
+    axis.set_yscale(density_scale)
+    if density_scale == 'log':
+        axis.yaxis.set_major_locator(LogLocator(base=10, numticks=5))
+        axis.yaxis.set_major_formatter(LogFormatterMathtext(base=10))
+        axis.yaxis.set_minor_formatter(NullFormatter())
+    else:
+        axis.yaxis.set_major_locator(MaxNLocator(nbins=4))
+
+
+def plot_method_ecdfs(axis, source, method_key):
+    """Plot Real and Generated ECDFs for one method row."""
+    for class_key, class_color in (
+        ('real', REAL_COLOR),
+        ('generated', GENERATED_COLOR),
+    ):
+        values = np.sort(source[method_key][class_key])
+        cumulative = np.arange(1, values.size + 1) / values.size
+        axis.step(
+            values,
+            cumulative,
+            where='post',
+            color=class_color,
+            linewidth=1.05,
+        )
+
+
 def style_axis(axis, bin_edges):
     axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
     axis.grid(axis='y', color='#D8D8D8', linewidth=0.4, alpha=0.55)
@@ -609,6 +666,31 @@ def align_source_class_axes(axes, bin_edges, plot_kind):
         for axis in axes:
             axis.set_ylim(0.0, 1.01)
         return
+
+
+def align_source_method_axes(
+    axes,
+    bin_edges,
+    plot_kind,
+    density_scale,
+):
+    """Share both x and y ranges across C2P-CLIP/CAR method rows."""
+    for axis in axes:
+        axis.set_xlim(float(bin_edges[0]), float(bin_edges[-1]))
+    if plot_kind == 'ecdf':
+        for axis in axes:
+            axis.set_ylim(0.0, 1.01)
+        return
+
+    y_limits = [axis.get_ylim() for axis in axes]
+    if density_scale == 'log':
+        shared_bottom = min(limit[0] for limit in y_limits)
+        shared_top = max(limit[1] for limit in y_limits)
+    else:
+        shared_bottom = 0.0
+        shared_top = max(limit[1] for limit in y_limits)
+    for axis in axes:
+        axis.set_ylim(shared_bottom, shared_top)
 
 
 def build_figure(
@@ -647,30 +729,52 @@ def build_figure(
             'density_scale': gan_density_scale,
         }
 
+    method_row_layout = gan_data is None
     for column_index, (protocol_name, source) in enumerate(columns):
         settings = protocol_settings[protocol_name]
         bin_edges = source['bin_edges']
         source_axes = []
-        for row_index, class_key in enumerate(('real', 'generated')):
-            axis = axes[row_index, column_index]
-            if settings['plot_kind'] == 'histogram':
-                plot_histogram_comparison(
-                    axis,
-                    source,
-                    class_key,
-                    bin_edges,
-                    settings['density_scale'],
-                )
-            else:
-                plot_ecdf_comparison(axis, source, class_key)
-            style_axis(axis, bin_edges)
-            source_axes.append(axis)
-
-        align_source_class_axes(
-            source_axes,
-            bin_edges,
-            settings['plot_kind'],
-        )
+        if method_row_layout:
+            for row_index, method_key in enumerate(('baseline', 'car')):
+                axis = axes[row_index, column_index]
+                if settings['plot_kind'] == 'histogram':
+                    plot_method_histograms(
+                        axis,
+                        source,
+                        method_key,
+                        bin_edges,
+                        settings['density_scale'],
+                    )
+                else:
+                    plot_method_ecdfs(axis, source, method_key)
+                style_axis(axis, bin_edges)
+                source_axes.append(axis)
+            align_source_method_axes(
+                source_axes,
+                bin_edges,
+                settings['plot_kind'],
+                settings['density_scale'],
+            )
+        else:
+            for row_index, class_key in enumerate(('real', 'generated')):
+                axis = axes[row_index, column_index]
+                if settings['plot_kind'] == 'histogram':
+                    plot_histogram_comparison(
+                        axis,
+                        source,
+                        class_key,
+                        bin_edges,
+                        settings['density_scale'],
+                    )
+                else:
+                    plot_ecdf_comparison(axis, source, class_key)
+                style_axis(axis, bin_edges)
+                source_axes.append(axis)
+            align_source_class_axes(
+                source_axes,
+                bin_edges,
+                settings['plot_kind'],
+            )
 
         panel_letter = chr(ord('a') + column_index)
         axes[0, column_index].set_title(
@@ -724,46 +828,57 @@ def build_figure(
         fontsize=6.8,
     )
 
-    figure.text(
-        0.018,
-        axes[0, 0].get_position().y1 + 0.012,
-        'Real',
-        ha='left',
-        va='bottom',
-        fontsize=7.8,
-        fontweight='bold',
-        color=REAL_COLOR,
-    )
-    figure.text(
-        0.018,
-        axes[1, 0].get_position().y1 + 0.012,
-        'Generated',
-        ha='left',
-        va='bottom',
-        fontsize=7.8,
-        fontweight='bold',
-        color=GENERATED_COLOR,
-    )
+    if method_row_layout:
+        row_specs = (
+            ('C2P-CLIP', BASELINE_COLOR),
+            ('CAR', '#222222'),
+        )
+        legend_handles = [
+            Line2D([0], [0], color=REAL_COLOR, linewidth=1.2, label='Real'),
+            Line2D(
+                [0],
+                [0],
+                color=GENERATED_COLOR,
+                linewidth=1.2,
+                label='Generated',
+            ),
+        ]
+    else:
+        row_specs = (
+            ('Real', REAL_COLOR),
+            ('Generated', GENERATED_COLOR),
+        )
+        legend_handles = [
+            Line2D(
+                [0],
+                [0],
+                color=BASELINE_COLOR,
+                linewidth=1.0,
+                linestyle=(0, (3.0, 2.0)),
+                label='C2P-CLIP',
+            ),
+            Line2D(
+                [0],
+                [0],
+                color='#222222',
+                linewidth=1.2,
+                label='CAR',
+            ),
+        ]
+    for row_index, (row_label, row_color) in enumerate(row_specs):
+        figure.text(
+            0.018,
+            axes[row_index, 0].get_position().y1 + 0.012,
+            row_label,
+            ha='left',
+            va='bottom',
+            fontsize=7.8,
+            fontweight='bold',
+            color=row_color,
+        )
 
-    method_handles = [
-        Line2D(
-            [0],
-            [0],
-            color=BASELINE_COLOR,
-            linewidth=1.0,
-            linestyle=(0, (3.0, 2.0)),
-            label='C2P-CLIP',
-        ),
-        Line2D(
-            [0],
-            [0],
-            color='#222222',
-            linewidth=1.2,
-            label='CAR',
-        ),
-    ]
     figure.legend(
-        handles=method_handles,
+        handles=legend_handles,
         loc='upper center',
         bbox_to_anchor=(0.5, 0.875),
         ncol=2,
@@ -944,13 +1059,23 @@ def run(args):
             'selection': 'explicit representative sources; no automatic ranking',
             'all_matching_samples_included': True,
             'axis_comparability': (
-                'Baseline and CAR are overlaid with identical bins and axes '
-                'within each source and class; class rows share the source '
-                'raw-logit range'
+                'C2P-CLIP and CAR method rows use identical bins and shared '
+                'x/y axes within each diffusion source'
+                if args.layout == 'diffusion-only'
+                else (
+                    'Baseline and CAR are overlaid with identical bins and '
+                    'axes within each source and class; class rows share the '
+                    'source raw-logit range'
+                )
             ),
             'layout': (
-                'rows encode Real/Generated classes; line style encodes '
-                'C2P-CLIP/CAR methods'
+                'rows encode C2P-CLIP/CAR methods; color encodes '
+                'Real/Generated classes'
+                if args.layout == 'diffusion-only'
+                else (
+                    'rows encode Real/Generated classes; line style encodes '
+                    'C2P-CLIP/CAR methods'
+                )
             ),
         },
         'inputs': {
